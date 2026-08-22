@@ -1,36 +1,61 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# mine-brain · 个人思考伙伴
 
-## Getting Started
+不是笔记工具，不是 RAG 机器人。这是一个**记得住你、会对照你的过去、敢反驳你**的长期生活思考伙伴。
 
-First, run the development server:
+![对话](docs/screenshots/chat.png)
+
+## 它做什么
+
+- **长期记忆**：价值观、人生阶段、反复纠结（开放回路）、重要决定及其复盘，全部带时间戳沉淀在本地。
+- **矛盾对照**：你说的话会和过去的你对照——「你三月说过 X，现在你在说 ~X」。改变主意不会被覆盖，旧主张保留并被标记，因为「你曾经怎么想」本身就是价值。
+- **反方优先**：回复前先给认真的反驳与盲点；做决定时自动走一遍决定协议（最坏情况 / 推翻成本 / 三年后回看 / 与价值观的一致性）。
+- **自动整理**：每次对话后，AI 把值得记的内容抽成结构化记忆（主张 / 决定 / 纠结 / 洞察 / 行为模式），打标签、建关联边。
+- **图片输入**：聊天里可直接上传/粘贴截图（vision 格式）。识别质量取决于所配模型的多模态能力——推理型免费模型在长提示下可能不稳定，建议为 thinker 角色配置 vision 能力强的模型。
+- **数据主权**：一切存在本地 SQLite 单文件，一键导出 JSON，无任何云端锁定。
+
+![记忆](docs/screenshots/memories.png)
+
+## 快速开始
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm install
+cp .env.example .env.local   # 填入 AI 服务商配置（OpenAI 兼容协议）
+npm run dev                  # http://localhost:3000
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+打开页面 → 引导页写下「关于你」（或先用示例档案体验）→ 开始第一次深聊。
+**不想改文件？** 直接进「设置」页填 Base URL / API Key / 模型即可，配置存本地数据库。
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+技术要求：Node.js 22.5+（使用内置 `node:sqlite`，无需任何原生编译依赖）。
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## 架构
 
-## Learn More
+```
+Next.js App Router (React + TS + Tailwind)
+├─ src/app/            页面与 API 路由（chat SSE 流式）
+├─ src/lib/providers/  AI Provider 抽象：业务只声明角色(thinker/extractor/embedder)，
+│                      换厂商=改设置页，不改代码
+├─ src/lib/memory/     记忆仓库 / 多信号检索 / 会话整理流水线
+├─ src/lib/agent/      思考伙伴人格提示词 + 对话编排
+└─ data/               SQLite 数据库（gitignored，你的全部资产）
+```
 
-To learn more about Next.js, take a look at the following resources:
+检索哲学：服务于深度思考而非相似度匹配——标签/生活域命中 + 时近 + 重要性 + 沿 contradicts/supersedes 边专项拉取张力素材；若配置了 embedder 则自动叠加向量通道。
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## 记忆模型
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+| 类型 | 含义 |
+| --- | --- |
+| profile / value | 宪章层：我是谁、价值排序（新的取代旧的，旧的封口留档） |
+| claim | 主张·信念，带生效区间，可被 supersede / contradict |
+| decision | 决定 + 推理 + 后续状态 |
+| question | 开放回路：反复出现的纠结，长期追踪 |
+| insight / pattern | 整理产出的高层认知与行为模式 |
 
-## Deploy on Vercel
+## 隐私
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+所有数据（含 API Key）只存本机 `data/` 目录。对话只在调用 AI 服务商时出网，且仅携带当次相关记忆切片。导出功能随时带走全部历史。
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+---
+
+MIT License

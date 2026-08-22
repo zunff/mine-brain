@@ -110,9 +110,10 @@ function buildUserContent(
 ): string | ContentPart[] {
   if (!images || images.length === 0) return text;
   const parts: ContentPart[] = [];
+  // 文字在前、图在后：部分推理模型在长 system 提示下图先文后会出现视觉注意力退化
+  if (text.trim()) parts.push({ type: "text", text });
   for (const url of images.slice(0, 4)) {
     parts.push({ type: "image_url", image_url: { url } });
   }
-  if (text.trim()) parts.push({ type: "text", text });
   return parts;
 }

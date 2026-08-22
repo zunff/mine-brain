@@ -25,7 +25,7 @@ export default function MemoriesPage() {
   const [memories, setMemories] = useState<MemoryWithTags[]>([]);
   const [filter, setFilter] = useState<{ type: MemoryType | "all"; all: boolean }>({
     type: "all",
-    all: false,
+    all: true,
   });
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
