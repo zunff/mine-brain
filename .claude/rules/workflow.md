@@ -3,8 +3,9 @@
 ## 改动后验证顺序
 
 1. `npm run build` —— 类型检查 + 构建必须零错误。
-2. `npm run lint` —— 无新增 error。
-3. UI 改动：起 dev server（后台），用 playwright-cli 截图验证：
+2. `npm test` —— 单元测试（vitest，tests/ 目录）必须全绿；改检索/整理/Provider 逻辑时必须同步补测试。
+3. `npm run lint` —— 无新增 error。
+4. UI 改动：起 dev server（后台），用 playwright-cli 截图验证：
 
 ```bash
 playwright-cli open http://localhost:3000
