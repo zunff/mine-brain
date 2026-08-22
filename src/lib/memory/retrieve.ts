@@ -43,10 +43,6 @@ const THEME_KEYWORDS: Record<string, string[]> = {
   self: ["我", "自己", "性格", "拖延", "自律", "自信", "内耗"],
 };
 
-export interface RetrievedTag {
-  name: string;
-}
-
 /** 从用户消息中提取检索信号：标签词命中 + 生活域判定。不依赖分词器。 */
 export function extractSignals(
   message: string,

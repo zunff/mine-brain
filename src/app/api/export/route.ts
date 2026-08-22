@@ -14,6 +14,19 @@ const TABLES = [
   "settings",
 ] as const;
 
+/** 全局 apiKey 与所有角色覆盖的 apiKey 一律脱敏，密钥不出导出文件。 */
+function redactAiConfig(cfg: Record<string, unknown>): void {
+  if (typeof cfg.apiKey === "string" && cfg.apiKey) cfg.apiKey = "__REDACTED__";
+  const roles = cfg.roles as Record<string, { apiKey?: unknown }> | undefined;
+  if (roles && typeof roles === "object") {
+    for (const o of Object.values(roles)) {
+      if (o && typeof o === "object" && typeof o.apiKey === "string" && o.apiKey) {
+        o.apiKey = "__REDACTED__";
+      }
+    }
+  }
+}
+
 /** 全量导出为 JSON——数据主权兜底。密钥不出导出文件：ai 配置里的 apiKey 一律脱敏。 */
 export async function GET(): Promise<Response> {
   const db = getDb();
@@ -25,7 +38,7 @@ export async function GET(): Promise<Response> {
         if (row.key === "ai" && typeof row.value === "string") {
           try {
             const cfg = JSON.parse(row.value) as Record<string, unknown>;
-            if (typeof cfg.apiKey === "string" && cfg.apiKey) cfg.apiKey = "__REDACTED__";
+            redactAiConfig(cfg);
             row.value = JSON.stringify(cfg);
           } catch {
             /* 保持原样 */

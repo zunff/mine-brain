@@ -9,6 +9,46 @@ export type MemoryType =
 
 export type MemoryStatus = "active" | "superseded" | "rejected" | "archived";
 
+/** 运行时校验用的合法值集（API 入参、LLM 输出都可能带非法值，不能只靠 TS 类型）。 */
+export const MEMORY_TYPES: readonly MemoryType[] = [
+  "profile",
+  "value",
+  "claim",
+  "decision",
+  "question",
+  "insight",
+  "pattern",
+];
+
+export const MEMORY_STATUSES: readonly MemoryStatus[] = [
+  "active",
+  "superseded",
+  "rejected",
+  "archived",
+];
+
+/** 记忆候选的状态：整理产出先入暂存（pending），用户确认后 approved、拒绝则 rejected。 */
+export type CandidateStatus = "pending" | "approved" | "rejected";
+
+/** 立场类记忆（profile/value/claim/decision）才能取代旧记忆；观察类（question/insight/pattern）只能质疑。
+ * 真实 bug 回归锚点：观察类记忆曾被误标为推翻价值陈述。 */
+export function canSupersede(type: MemoryType): boolean {
+  return type === "profile" || type === "value" || type === "claim" || type === "decision";
+}
+
+/** extractor 输出的单条抽取项（LLM 原始输出的宽松形态，字段可能不是预期类型）。 */
+export interface ExtractItem {
+  type?: string;
+  title?: string;
+  content?: string;
+  theme?: string;
+  importance?: number;
+  sentiment?: number;
+  tags?: string[];
+  supersedes?: number | null;
+  contradicts?: number[];
+}
+
 export type LinkRel =
   | "supports"
   | "contradicts"
@@ -43,6 +83,8 @@ export interface SessionRow {
   consolidated_upto: number;
   created_at: string;
   updated_at: string;
+  /** 消息条数（列表接口附带，用于「空对话」判断）。 */
+  message_count?: number;
 }
 
 export interface MessageRow {

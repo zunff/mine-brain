@@ -110,4 +110,27 @@ CREATE TABLE IF NOT EXISTS memory_embeddings (
 CREATE INDEX IF NOT EXISTS idx_emb_model ON memory_embeddings(model);
 `,
   },
+  {
+    id: 4,
+    sql: `
+CREATE TABLE IF NOT EXISTS memory_candidates (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  type TEXT NOT NULL DEFAULT 'claim' CHECK(type IN ('profile','value','claim','decision','question','insight','pattern')),
+  title TEXT NOT NULL DEFAULT '',
+  content TEXT NOT NULL,
+  importance REAL NOT NULL DEFAULT 0.5,
+  theme TEXT,
+  sentiment REAL,
+  tags TEXT,
+  supersedes INTEGER,
+  contradicts TEXT,
+  source_entry_id INTEGER REFERENCES entries(id) ON DELETE SET NULL,
+  session_id INTEGER REFERENCES sessions(id) ON DELETE SET NULL,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','approved','rejected')),
+  created_at TEXT NOT NULL,
+  decided_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_candidates_session_status ON memory_candidates(session_id, status);
+`,
+  },
 ];

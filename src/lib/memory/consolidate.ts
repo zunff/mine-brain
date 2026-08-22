@@ -4,53 +4,27 @@ import {
   resolveEmbedder,
   resolveProvider,
 } from "@/lib/providers/registry";
-import { getAiSettings } from "./repo";
 import {
   addEntry,
-  getMemory,
+  getAiSettings,
   getSession,
-  insertMemory,
-  linkMemories,
+  insertCandidate,
   listMemories,
-  listMessages,
+  listMessagesAfter,
   setMemoryEmbedding,
-  setTags,
-  supersedeMemory,
   touchSession,
 } from "./repo";
-import { THEMES, type MemoryType } from "./types";
+import { type ExtractItem, type MessageRow } from "./types";
 
 /**
- * 会话后整理：用 extractor 角色从对话中抽取结构化记忆。
- * 失败绝不影响聊天主流程——调用方必须 try/catch 包裹。
+ * 会话后整理：用 extractor 角色从对话中抽取候选记忆，写入暂存（memory_candidates）。
+ * 用户确认后才落正式记忆。失败绝不影响聊天主流程——调用方必须 try/catch 包裹。
  */
-
-interface ExtractItem {
-  type?: string;
-  title?: string;
-  content?: string;
-  theme?: string;
-  importance?: number;
-  sentiment?: number;
-  tags?: string[];
-  supersedes?: number | null;
-  contradicts?: number[];
-}
 
 interface ExtractResult {
   items: ExtractItem[];
   session_summary?: string;
 }
-
-const VALID_TYPES: MemoryType[] = [
-  "profile",
-  "value",
-  "claim",
-  "decision",
-  "question",
-  "insight",
-  "pattern",
-];
 
 function buildExtractorPrompt(
   conversation: string,
@@ -83,15 +57,43 @@ ${conversation}
 {"items":[{"type":"...","title":"...","content":"...","theme":"...","importance":0.5,"sentiment":0,"tags":["..."],"supersedes":null,"contradicts":[]}],"session_summary":"一句话概括这段对话"}`;
 }
 
+/** 对话字符预算：一批内的每条消息都必须完整喂给模型，超预算的旧消息留待下批。 */
+const BATCH_CHAR_BUDGET = 11000;
+
 /**
- * 语义守卫：只有立场类记忆能取代旧记忆（supersede）；
- * 观察类（question/insight/pattern）「质疑」不等于「取代」——
- * 模型误填 supersedes 时由调用方降级为 related_to 边。
- * 这是真实 bug 的回归锚点：开放回路曾把价值陈述错误标记为已推翻。
+ * 从「未整理消息」里按最新优先攒出一个连续批次，直到字符预算用尽。
+ * 返回升序、id 连续的切片；consolidated_upto 只推进到本批最大 id，
+ * 从而保证超长会话逐批消化，绝不静默跳段。单条超长消息在它成为批次最新时整条纳入。
  */
-export function canSupersede(type: MemoryType): boolean {
-  const STANCE_TYPES: MemoryType[] = ["profile", "value", "claim", "decision"];
-  return STANCE_TYPES.includes(type);
+export function selectFreshBatch(
+  unprocessed: MessageRow[],
+  charBudget = BATCH_CHAR_BUDGET,
+): MessageRow[] {
+  const fresh: MessageRow[] = [];
+  let budget = charBudget;
+  for (let i = unprocessed.length - 1; i >= 0; i--) {
+    const m = unprocessed[i];
+    const cost = m.content.length + 6; // 「用户/伙伴：」前缀与换行
+    if (fresh.length > 0 && cost > budget) break;
+    fresh.unshift(m);
+    budget -= cost;
+  }
+  // 批次必须至少含一轮对话（user+assistant），否则整理门槛永远过不了会卡死。
+  // 预算不够就向前放宽，把批次起点往前补，宁多勿卡。
+  const hasUser = fresh.some((m) => m.role === "user");
+  const hasAssistant = fresh.some((m) => m.role === "assistant");
+  if (!hasUser || !hasAssistant) {
+    for (let i = unprocessed.length - 1 - fresh.length; i >= 0; i--) {
+      fresh.unshift(unprocessed[i]);
+      if (
+        fresh.some((m) => m.role === "user") &&
+        fresh.some((m) => m.role === "assistant")
+      ) {
+        break;
+      }
+    }
+  }
+  return fresh;
 }
 
 /** 抽取并入库。返回新增记忆条数；抛错由调用方兜底。 */
@@ -99,17 +101,18 @@ export async function consolidateSession(sessionId: number): Promise<number> {
   const session = getSession(sessionId);
   if (!session) throw new Error(`session ${sessionId} not found`);
 
-  const messages = listMessages(sessionId);
-  const fresh = messages.filter((m) => m.id > session.consolidated_upto);
-  // 至少一轮完整对话才值得整理
+  // 只取未整理消息里最近的一批（升序）；批次内部保证完整、连续。
+  const fresh = selectFreshBatch(
+    listMessagesAfter(sessionId, session.consolidated_upto, 200),
+  );
+  // 至少一轮完整对话才值得整理；不够就整批留到下次（不推进 upto）
   if (!fresh.some((m) => m.role === "user") || !fresh.some((m) => m.role === "assistant")) {
     return 0;
   }
 
   const conversation = fresh
     .map((m) => `${m.role === "user" ? "用户" : "伙伴"}：${m.content}`)
-    .join("\n\n")
-    .slice(0, 12000);
+    .join("\n\n");
 
   const digest = listMemories({ limit: 60 })
     .map((m) => `${m.id} | ${m.type} | ${(m.title || m.content).slice(0, 70)}`)
@@ -131,53 +134,11 @@ export async function consolidateSession(sessionId: number): Promise<number> {
   }
 
   const entryId = addEntry("chat", conversation.slice(0, 8000), sessionId);
-  let inserted = 0;
-  const newMemories: Array<{ id: number; content: string }> = [];
-
+  let candidatesAdded = 0;
   for (const item of parsed.items.slice(0, 12)) {
     if (!item.content?.trim()) continue;
-    const type = VALID_TYPES.includes(item.type as MemoryType)
-      ? (item.type as MemoryType)
-      : "claim";
-    const theme =
-      item.theme && (THEMES as readonly string[]).includes(item.theme)
-        ? item.theme
-        : "self";
-    const memoryId = insertMemory({
-      type,
-      title: (item.title ?? "").slice(0, 80),
-      content: item.content.trim().slice(0, 2000),
-      importance: clampNum(item.importance, 0, 1, 0.5),
-      sentiment:
-        item.sentiment == null ? null : clampNum(item.sentiment, -1, 1, 0),
-      theme,
-      sourceEntryId: entryId,
-      sessionId,
-    });
-    inserted++;
-    newMemories.push({ id: memoryId, content: item.content.trim().slice(0, 2000) });
-    setTags(memoryId, Array.isArray(item.tags) ? item.tags.map(String) : []);
-
-    // 领域规则：价值观是单一演进的排名——新 value 入库时，旧的 active value
-    // 一律封口为 superseded 并连边（模型漏填 supersedes 时兜底）。
-    let supersededAny = false;
-    for (const old of listMemories({ type: "value", limit: 50 })) {
-      if (old.id === memoryId) continue;
-      supersedeMemory(old.id, memoryId);
-      supersededAny = true;
-    }
-
-    if (!supersededAny && item.supersedes && getMemory(Number(item.supersedes))) {
-      const targetId = Number(item.supersedes);
-      if (canSupersede(type)) {
-        supersedeMemory(targetId, memoryId);
-      } else {
-        linkMemories(memoryId, targetId, "related_to", "观察类记忆的模型误填，已降级");
-      }
-    }
-    for (const cid of (item.contradicts ?? []).slice(0, 3)) {
-      if (getMemory(Number(cid))) linkMemories(memoryId, Number(cid), "contradicts");
-    }
+    insertCandidate(item, entryId, sessionId);
+    candidatesAdded++;
   }
 
   touchSession(sessionId, {
@@ -185,13 +146,12 @@ export async function consolidateSession(sessionId: number): Promise<number> {
     summary: parsed.session_summary?.slice(0, 300) ?? session.summary ?? undefined,
   });
 
-  // 向量化新记忆：失败不影响整理成功，签名后静默降级（无向量 → 检索走词法信号）。
-  await embedNewMemories(settings, newMemories);
-  return inserted;
+  // 候选入暂存即可，不碰正式 memories；向量化在用户确认后（approveCandidate）再做。
+  return candidatesAdded;
 }
 
 /** 把新记忆批量嵌入并按 (model, dims) 存元数据。任何失败都不抛，交给调用方兜底。 */
-async function embedNewMemories(
+export async function embedNewMemories(
   settings: ReturnType<typeof getAiSettings>,
   memories: Array<{ id: number; content: string }>,
 ): Promise<void> {
@@ -230,8 +190,3 @@ export function parseJsonLoose<T>(text: string): T | null {
   }
 }
 
-function clampNum(v: unknown, lo: number, hi: number, dflt: number): number {
-  const n = typeof v === "number" ? v : Number(v);
-  if (Number.isNaN(n)) return dflt;
-  return Math.min(hi, Math.max(lo, n));
-}

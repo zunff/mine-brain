@@ -3,7 +3,7 @@ import {
   softDeleteMemory,
   updateImportance,
 } from "@/lib/memory/repo";
-import type { MemoryStatus } from "@/lib/memory/types";
+import { MEMORY_STATUSES, type MemoryStatus } from "@/lib/memory/types";
 
 export const dynamic = "force-dynamic";
 
@@ -24,6 +24,9 @@ export async function PATCH(
   }
   const body = (await req.json().catch(() => null)) as PatchBody | null;
   if (!body) return Response.json({ error: "invalid json" }, { status: 400 });
+  if (body.status && !(MEMORY_STATUSES as readonly string[]).includes(body.status)) {
+    return Response.json({ error: `invalid status: ${body.status}` }, { status: 400 });
+  }
 
   if (body.status) setMemoryStatus(memoryId, body.status);
   if (typeof body.importance === "number") {

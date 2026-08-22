@@ -18,7 +18,7 @@ export type OrchestratorEvent =
   | { type: "meta"; sessionId: number; title: string }
   | { type: "reasoning"; text: string }
   | { type: "content"; text: string }
-  | { type: "done"; memoriesAdded: number };
+  | { type: "done"; candidatesAdded: number };
 
 const HISTORY_LIMIT = 12;
 
@@ -89,14 +89,14 @@ export async function* runChat(
     yield { type: "content", text: content };
   }
 
-  let memoriesAdded = 0;
+  let candidatesAdded = 0;
   try {
-    memoriesAdded = await consolidateSession(session.id);
+    candidatesAdded = await consolidateSession(session.id);
   } catch (err) {
     console.error("[consolidate] failed:", err);
   }
 
-  yield { type: "done", memoriesAdded };
+  yield { type: "done", candidatesAdded };
 }
 
 function deriveTitle(text: string): string {

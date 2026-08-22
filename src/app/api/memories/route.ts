@@ -5,7 +5,7 @@ import {
   setTags,
   tagsByMemoryIds,
 } from "@/lib/memory/repo";
-import type { MemoryType, MemoryStatus } from "@/lib/memory/types";
+import { MEMORY_TYPES, THEMES, type MemoryType, type MemoryStatus } from "@/lib/memory/types";
 
 export const dynamic = "force-dynamic";
 
@@ -39,6 +39,12 @@ export async function POST(req: Request): Promise<Response> {
   const body = (await req.json().catch(() => null)) as PostBody | null;
   if (!body?.content?.trim()) {
     return Response.json({ error: "content required" }, { status: 400 });
+  }
+  if (body.type && !(MEMORY_TYPES as readonly string[]).includes(body.type)) {
+    return Response.json({ error: `invalid type: ${body.type}` }, { status: 400 });
+  }
+  if (body.theme && !(THEMES as readonly string[]).includes(body.theme)) {
+    return Response.json({ error: `invalid theme: ${body.theme}` }, { status: 400 });
   }
   const entryId = addEntry("journal", body.content.trim());
   const id = insertMemory({

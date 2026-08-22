@@ -22,7 +22,7 @@ export async function POST(): Promise<Response> {
   const provider = resolveEmbedder(settings);
 
   const actives = listMemories({ limit: 100000 });
-  const missing = embeddingsMissingCount(actives.map((m) => m.id), rt.model);
+  const missing = embeddingsMissingCount(actives.map((m) => m.id), rt.model, rt.dimensions);
   if (missing === 0) {
     return Response.json({ ok: true, total: actives.length, done: 0, skipped: true });
   }

@@ -1,11 +1,16 @@
 import { getDb, nowIso } from "@/lib/db/client";
-import type {
-  MemoryRow,
-  MemoryType,
-  MemoryStatus,
-  LinkRel,
-  SessionRow,
-  MessageRow,
+import {
+  canSupersede,
+  MEMORY_TYPES,
+  THEMES,
+  type CandidateStatus,
+  type ExtractItem,
+  type LinkRel,
+  type MemoryRow,
+  type MemoryStatus,
+  type MemoryType,
+  type MessageRow,
+  type SessionRow,
 } from "./types";
 import { defaultAiSettings, type AiSettings } from "@/lib/providers/registry";
 
@@ -48,7 +53,8 @@ export function getAiSettings(): AiSettings {
 export function listSessions(): SessionRow[] {
   return getDb()
     .prepare(
-      "SELECT * FROM sessions ORDER BY updated_at DESC LIMIT 200",
+      `SELECT s.*, (SELECT COUNT(*) FROM messages m WHERE m.session_id = s.id) AS message_count
+       FROM sessions s ORDER BY s.updated_at DESC LIMIT 200`,
     )
     .all() as unknown as SessionRow[];
 }
@@ -133,6 +139,21 @@ export function listMessages(sessionId: number, limit = 200): MessageRow[] {
     )
     .all(sessionId, limit)
     .reverse() as unknown as MessageRow[];
+}
+
+/** 取某会话中 id 大于 afterId 的最近 limit 条消息（升序）。分批整理用：每次只推进真正处理过的批次。 */
+export function listMessagesAfter(
+  sessionId: number,
+  afterId: number,
+  limit = 200,
+): MessageRow[] {
+  return getDb()
+    .prepare(
+      `SELECT * FROM (
+         SELECT * FROM messages WHERE session_id = ? AND id > ? ORDER BY id DESC LIMIT ?
+       ) ORDER BY id ASC`,
+    )
+    .all(sessionId, afterId, limit) as unknown as MessageRow[];
 }
 
 /* ---------------- entries（不可变原始摄取） ---------------- */
@@ -357,26 +378,177 @@ export function embeddingsFor(model: string): StoredEmbedding[] {
   }));
 }
 
-/** 当前模型下还缺向量的 active 记忆数（重嵌进度用）。 */
-export function embeddingsMissingCount(ids: number[], model: string): number {
+/** 当前 (model, dims) 下还缺向量的 active 记忆数（重嵌进度用）。
+ * dims 参与匹配：同模型改维度后旧向量不再算数，必须重嵌（跨维度比余弦=噪音）。 */
+export function embeddingsMissingCount(ids: number[], model: string, dims: number): number {
   if (ids.length === 0) return 0;
   const placeholders = ids.map(() => "?").join(",");
   const row = getDb()
     .prepare(
       `SELECT count(*) c FROM memories m
-       LEFT JOIN memory_embeddings e ON e.memory_id = m.id AND e.model = ?
+       LEFT JOIN memory_embeddings e ON e.memory_id = m.id AND e.model = ? AND e.dims = ?
        WHERE m.deleted_at IS NULL AND m.status = 'active' AND m.id IN (${placeholders}) AND e.memory_id IS NULL`,
     )
-    .get(model, ...ids) as { c: number };
+    .get(model, dims, ...ids) as { c: number };
   return row.c;
 }
 
-export function allTagNames(): string[] {
+/* ---------------- memory candidates（暂存待确认） ---------------- */
+
+export interface CandidateRow {
+  id: number;
+  type: MemoryType;
+  title: string;
+  content: string;
+  importance: number;
+  theme: string | null;
+  sentiment: number | null;
+  tags: string | null;
+  supersedes: number | null;
+  contradicts: string | null;
+  source_entry_id: number | null;
+  session_id: number | null;
+  status: CandidateStatus;
+  created_at: string;
+  decided_at: string | null;
+}
+
+/** 把一条抽取结果写入候选暂存（不触碰正式 memories）。type/theme/数值在此归一化。 */
+export function insertCandidate(item: ExtractItem, entryId: number, sessionId: number): number {
+  const type = MEMORY_TYPES.includes(item.type as MemoryType)
+    ? (item.type as MemoryType)
+    : "claim";
+  const theme =
+    item.theme && THEMES.includes(item.theme as (typeof THEMES)[number])
+      ? item.theme
+      : null;
+  const res = getDb()
+    .prepare(
+      `INSERT INTO memory_candidates
+        (type, title, content, importance, theme, sentiment, tags, supersedes, contradicts,
+         source_entry_id, session_id, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      type,
+      String(item.title ?? "").slice(0, 80),
+      (item.content ?? "").trim().slice(0, 2000),
+      clampNum(item.importance, 0, 1, 0.5),
+      theme,
+      item.sentiment == null ? null : clampNum(item.sentiment, -1, 1, 0),
+      Array.isArray(item.tags) ? JSON.stringify(item.tags.map(String).slice(0, 12)) : null,
+      item.supersedes ? Number(item.supersedes) : null,
+      Array.isArray(item.contradicts)
+        ? JSON.stringify(item.contradicts.slice(0, 3).map(Number))
+        : null,
+      entryId,
+      sessionId,
+      nowIso(),
+    );
+  return Number(res.lastInsertRowid);
+}
+
+export function getCandidate(id: number): CandidateRow | null {
   return (
-    getDb().prepare("SELECT name FROM tags ORDER BY name").all() as Array<{
-      name: string;
-    }>
-  ).map((r) => r.name);
+    (getDb().prepare("SELECT * FROM memory_candidates WHERE id = ?").get(id) as
+      | CandidateRow
+      | undefined) ?? null
+  );
+}
+
+export function listCandidates(
+  f: { sessionId?: number; status?: CandidateStatus; limit?: number } = {},
+): CandidateRow[] {
+  const where: string[] = ["1=1"];
+  const args: (string | number)[] = [];
+  if (f.sessionId != null) {
+    where.push("session_id = ?");
+    args.push(f.sessionId);
+  }
+  if (f.status) {
+    where.push("status = ?");
+    args.push(f.status);
+  }
+  args.push(f.limit ?? 100);
+  return getDb()
+    .prepare(
+      `SELECT * FROM memory_candidates WHERE ${where.join(" AND ")} ORDER BY id DESC LIMIT ?`,
+    )
+    .all(...args) as unknown as CandidateRow[];
+}
+
+/** 确认候选：落正式记忆 + 标签 + 关联边。语义守卫在此生效（value 封口 / canSupersede）。 */
+export function approveCandidate(id: number): number {
+  const c = getCandidate(id);
+  if (!c) throw new Error(`candidate ${id} not found`);
+  if (c.status !== "pending") throw new Error(`candidate ${id} already decided`);
+
+  const memoryId = insertMemory({
+    type: c.type,
+    title: c.title,
+    content: c.content,
+    importance: c.importance,
+    sentiment: c.sentiment,
+    theme: c.theme,
+    sourceEntryId: c.source_entry_id,
+    sessionId: c.session_id,
+  });
+
+  let tags: string[] = [];
+  if (c.tags) {
+    try {
+      const parsed = JSON.parse(c.tags);
+      if (Array.isArray(parsed)) tags = parsed.map(String);
+    } catch {
+      /* 忽略损坏的标签 */
+    }
+  }
+  setTags(memoryId, tags);
+
+  let supersededAny = false;
+  if (c.type === "value") {
+    for (const old of listMemories({ type: "value", limit: 50 })) {
+      if (old.id === memoryId) continue;
+      supersedeMemory(old.id, memoryId);
+      supersededAny = true;
+    }
+  }
+  if (!supersededAny && c.supersedes && getMemory(c.supersedes)) {
+    if (canSupersede(c.type)) {
+      supersedeMemory(c.supersedes, memoryId);
+    } else {
+      linkMemories(memoryId, c.supersedes, "related_to", "观察类记忆的模型误填，已降级");
+    }
+  }
+  if (c.contradicts) {
+    try {
+      const cids = JSON.parse(c.contradicts) as number[];
+      for (const cid of cids) {
+        if (getMemory(cid)) linkMemories(memoryId, cid, "contradicts");
+      }
+    } catch {
+      /* 忽略损坏的 contradicts */
+    }
+  }
+
+  getDb()
+    .prepare("UPDATE memory_candidates SET status = 'approved', decided_at = ? WHERE id = ?")
+    .run(nowIso(), id);
+  return memoryId;
+}
+
+export function rejectCandidate(id: number): void {
+  getDb()
+    .prepare(
+      "UPDATE memory_candidates SET status = 'rejected', decided_at = ? WHERE id = ? AND status = 'pending'",
+    )
+    .run(nowIso(), id);
+}
+
+function clampNum(v: unknown, lo: number, hi: number, dflt: number): number {
+  const n = typeof v === "number" ? v : Number(v);
+  if (Number.isNaN(n)) return dflt;
+  return Math.min(hi, Math.max(lo, n));
 }
 
 function clamp(v: number, lo: number, hi: number): number {

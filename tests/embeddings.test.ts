@@ -64,12 +64,14 @@ describe("memory_embeddings 存储", () => {
     expect([...embeddingsFor("m")[0].vector]).toEqual([9, 9]);
   });
 
-  it("embeddingsMissingCount 只统计当前模型缺失的 active 记忆", () => {
+  it("embeddingsMissingCount 只统计当前 (model,dims) 缺失的 active 记忆", () => {
     const a = seedMemory("有向量");
     const b = seedMemory("缺向量");
     setMemoryEmbedding(a, "m", 2, new Float32Array([1, 1]));
-    expect(embeddingsMissingCount([a, b], "m")).toBe(1);
-    expect(embeddingsMissingCount([a, b], "other")).toBe(2);
+    expect(embeddingsMissingCount([a, b], "m", 2)).toBe(1);
+    expect(embeddingsMissingCount([a, b], "other", 2)).toBe(2);
+    // 同模型改维度 = 换向量空间，旧向量不算数，必须重嵌
+    expect(embeddingsMissingCount([a, b], "m", 3)).toBe(2);
   });
 });
 

@@ -28,7 +28,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { cn } from "@/lib/utils";
+import { assertOk, cn } from "@/lib/utils";
 
 interface RoleView {
   model?: string;
@@ -97,22 +97,26 @@ export default function SettingsPage() {
     setTimeout(() => setToast(null), 3500);
   }
 
+  /** 把 /api/settings 的响应应用到表单状态（load 与初次挂载共用，避免两份重复）。 */
+  function applySettings(d: SettingsView) {
+    setView(d);
+    setG({ baseUrl: d.baseUrl, apiKey: "", model: d.model });
+    setRoles({
+      thinker: { ...EMPTY_ROLE },
+      extractor: { ...EMPTY_ROLE },
+    });
+    setEmbed({
+      model: d.roles?.embedder?.model ?? "",
+      baseUrl: d.roles?.embedder?.baseUrl ?? "",
+      apiKey: "",
+      dimensions: d.roles?.embedder?.dimensions?.toString() ?? "",
+    });
+  }
+
   async function load() {
     try {
       const res = await fetch("/api/settings");
-      const d = (await res.json()) as SettingsView;
-      setView(d);
-      setG({ baseUrl: d.baseUrl, apiKey: "", model: d.model });
-      setRoles({
-        thinker: { ...EMPTY_ROLE },
-        extractor: { ...EMPTY_ROLE },
-      });
-      setEmbed({
-        model: d.roles?.embedder?.model ?? "",
-        baseUrl: d.roles?.embedder?.baseUrl ?? "",
-        apiKey: "",
-        dimensions: d.roles?.embedder?.dimensions?.toString() ?? "",
-      });
+      applySettings((await res.json()) as SettingsView);
     } catch {
       showToast("加载设置失败", false);
     }
@@ -125,18 +129,7 @@ export default function SettingsPage() {
         const res = await fetch("/api/settings");
         const d = (await res.json()) as SettingsView;
         if (!active) return;
-        setView(d);
-        setG({ baseUrl: d.baseUrl, apiKey: "", model: d.model });
-        setRoles({
-          thinker: { ...EMPTY_ROLE },
-          extractor: { ...EMPTY_ROLE },
-        });
-        setEmbed({
-          model: d.roles?.embedder?.model ?? "",
-          baseUrl: d.roles?.embedder?.baseUrl ?? "",
-          apiKey: "",
-          dimensions: d.roles?.embedder?.dimensions?.toString() ?? "",
-        });
+        applySettings(d);
       } catch {
         // ignore
       }
@@ -149,22 +142,24 @@ export default function SettingsPage() {
   async function save() {
     setSaving(true);
     try {
-      await fetch("/api/settings", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ...g,
-          roles: {
-            ...roles,
-            embedder: {
-              model: embed.model,
-              baseUrl: embed.baseUrl,
-              apiKey: embed.apiKey,
-              dimensions: embed.dimensions,
+      await assertOk(
+        await fetch("/api/settings", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ...g,
+            roles: {
+              ...roles,
+              embedder: {
+                model: embed.model,
+                baseUrl: embed.baseUrl,
+                apiKey: embed.apiKey,
+                dimensions: embed.dimensions,
+              },
             },
-          },
+          }),
         }),
-      });
+      );
       showToast("设置已保存并生效");
       await load();
     } catch (e) {
@@ -209,11 +204,13 @@ export default function SettingsPage() {
   async function resetRole(role: RoleKey) {
     setRoles((prev) => ({ ...prev, [role]: { ...EMPTY_ROLE } }));
     try {
-      await fetch("/api/settings", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ roles: { [role]: { model: "", baseUrl: "", apiKey: "__CLEAR__" } } }),
-      });
+      await assertOk(
+        await fetch("/api/settings", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ roles: { [role]: { model: "", baseUrl: "", apiKey: "__CLEAR__" } } }),
+        }),
+      );
       showToast(`已重置 ${role} 角色为继承全局配置`);
       load();
     } catch {

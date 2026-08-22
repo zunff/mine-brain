@@ -37,7 +37,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { cn } from "@/lib/utils";
+import { assertOk, cn } from "@/lib/utils";
 
 interface Message {
   id?: number;
@@ -56,12 +56,13 @@ interface Session {
   message_count?: number;
 }
 
-interface StagedCandidate {
+interface Candidate {
+  id: number;
   type: string;
   title: string;
   content: string;
-  theme?: string;
-  tags?: string[];
+  importance: number;
+  theme?: string | null;
 }
 
 function parseMsgImages(images: unknown): string[] {
@@ -114,7 +115,7 @@ export default function ChatPage() {
   const [images, setImages] = useState<string[]>([]);
   const [streaming, setStreaming] = useState(false);
   const [reasoningOpen, setReasoningOpen] = useState(true);
-  const [staged, setStaged] = useState<StagedCandidate[]>([]);
+  const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [consolidating, setConsolidating] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -140,17 +141,6 @@ export default function ChatPage() {
     setTimeout(() => setToast(null), 3000);
   }, []);
 
-  const loadSessions = useCallback(async () => {
-    try {
-      const res = await fetch("/api/sessions");
-      const data = (await res.json()) as { sessions: Session[] };
-      setSessions(data.sessions ?? []);
-      return data.sessions ?? [];
-    } catch {
-      return [];
-    }
-  }, []);
-
   const loadMessages = useCallback(async (sessionId: string) => {
     try {
       const res = await fetch(`/api/sessions/${sessionId}`);
@@ -158,6 +148,20 @@ export default function ChatPage() {
       setMessages(data.messages ?? []);
     } catch {
       setMessages([]);
+    }
+  }, []);
+
+  const loadCandidates = useCallback(async (sessionId: string | null) => {
+    if (!sessionId) {
+      setCandidates([]);
+      return;
+    }
+    try {
+      const res = await fetch(`/api/candidates?sessionId=${sessionId}`);
+      const data = (await res.json()) as { candidates: Candidate[] };
+      setCandidates(data.candidates ?? []);
+    } catch {
+      setCandidates([]);
     }
   }, []);
 
@@ -205,6 +209,7 @@ export default function ChatPage() {
     setCurrentSessionId(id);
     setMobileDrawerOpen(false);
     await loadMessages(id);
+    await loadCandidates(id);
   };
 
   const createSession = async (initialTitle?: string) => {
@@ -219,6 +224,7 @@ export default function ChatPage() {
         setSessions((prev) => [data.session, ...prev]);
         setCurrentSessionId(data.session.id);
         setMessages([]);
+        setCandidates([]);
         setMobileDrawerOpen(false);
         return data.session.id;
       }
@@ -226,6 +232,15 @@ export default function ChatPage() {
       showToast("创建对话失败", "error");
     }
     return null;
+  };
+
+  /** 新对话：优先复用已存在的空会话，否则进入空白草稿（发送首条消息时才真正建会话）。 */
+  const startNewChat = () => {
+    const emptyNewest = sessions.find((s) => (s.message_count ?? 0) === 0);
+    setMessages([]);
+    setCandidates([]);
+    setCurrentSessionId(emptyNewest ? emptyNewest.id : null);
+    setMobileDrawerOpen(false);
   };
 
   const submitRename = async () => {
@@ -421,6 +436,15 @@ export default function ChatPage() {
       ]);
       showToast("发送失败，请检查配置", "error");
     } finally {
+      // 本地消息数 +2（空对话判断用）；刷新该会话产生的记忆候选
+      if (activeSessionId) {
+        setSessions((prev) =>
+          prev.map((s) =>
+            s.id === activeSessionId ? { ...s, message_count: (s.message_count ?? 0) + 2 } : s
+          )
+        );
+        loadCandidates(activeSessionId);
+      }
       setStreaming(false);
     }
   };
@@ -432,26 +456,40 @@ export default function ChatPage() {
     }
   };
 
+  /** 手动触发一次整理（自动整理每轮已跑过），然后刷新候选列表。 */
   const triggerConsolidate = async () => {
     if (!currentSessionId || consolidating) return;
     setConsolidating(true);
     try {
-      const res = await fetch("/api/consolidate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sessionId: currentSessionId }),
-      });
-      const data = (await res.json()) as { staged?: StagedCandidate[]; count?: number };
-      if (data.staged && data.staged.length > 0) {
-        setStaged(data.staged);
-        showToast(`已提取 ${data.staged.length} 条记忆沉淀！`);
-      } else {
-        showToast("本轮对话暂无需要沉淀的重要新记忆");
-      }
-    } catch {
-      showToast("整理记忆失败", "error");
+      await assertOk(
+        await fetch("/api/consolidate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sessionId: currentSessionId }),
+        }),
+      );
+      await loadCandidates(currentSessionId);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : "整理记忆失败", "error");
     } finally {
       setConsolidating(false);
+    }
+  };
+
+  /** 确认/拒绝记忆候选：确认才真正入库（+标签+关联边+向量化）。 */
+  const decideCandidate = async (id: number, decision: "approve" | "reject") => {
+    try {
+      await assertOk(
+        await fetch(`/api/candidates/${id}/decide`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ decision }),
+        }),
+      );
+      setCandidates((prev) => prev.filter((c) => c.id !== id));
+      if (decision === "approve") showToast("已确认为长期记忆");
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : "操作失败", "error");
     }
   };
 
@@ -496,7 +534,7 @@ export default function ChatPage() {
       >
         <div className="p-3 border-b border-border space-y-2">
           <Button
-            onClick={() => createSession()}
+            onClick={startNewChat}
             className="w-full justify-start gap-2 h-9"
             variant="primary"
           >
@@ -630,7 +668,7 @@ export default function ChatPage() {
             <Button
               variant="primary"
               size="sm"
-              onClick={() => createSession()}
+              onClick={startNewChat}
               className="h-8 text-xs gap-1 px-2.5"
             >
               <Plus className="h-3.5 w-3.5" />
@@ -813,33 +851,56 @@ export default function ChatPage() {
                 );
               })}
 
-              {/* Staged candidates card if consolidation produced memories */}
-              {staged.length > 0 && (
+              {/* 待确认的记忆候选：确认后才真正入库 */}
+              {candidates.length > 0 && (
                 <div className="my-6 p-4 rounded-xl border border-accent/40 bg-accent-soft/40 animate-in fade-in">
                   <div className="flex items-center justify-between mb-2">
                     <div className="flex items-center gap-2 text-xs font-semibold text-accent">
                       <Sparkles className="h-4 w-4" />
-                      <span>本次对话提炼出的记忆沉淀（已存入暂存库）</span>
+                      <span>本次对话的记忆候选（确认后入库）</span>
                     </div>
                     <Button
                       variant="ghost"
                       size="sm"
-                      onClick={() => setStaged([])}
+                      onClick={() => setCandidates([])}
                       className="h-6 w-6 p-0"
                     >
                       <X className="h-3.5 w-3.5 text-muted" />
                     </Button>
                   </div>
                   <div className="space-y-2 mt-3">
-                    {staged.map((c, i) => (
-                      <div key={i} className="p-2.5 rounded-lg bg-surface border border-border text-xs">
+                    {candidates.map((c) => (
+                      <div key={c.id} className="p-2.5 rounded-lg bg-surface border border-border text-xs">
                         <div className="flex items-center gap-1.5 text-muted mb-1">
                           <Badge variant="accent" className="text-[10px] py-0 px-1.5">
                             {c.type}
                           </Badge>
-                          <span className="font-medium text-foreground">{c.title}</span>
+                          {c.title && (
+                            <span className="font-medium text-foreground">{c.title}</span>
+                          )}
                         </div>
-                        <p className="text-muted leading-relaxed text-[11px]">{c.content}</p>
+                        <p className="text-muted leading-relaxed text-[11px] whitespace-pre-wrap">
+                          {c.content}
+                        </p>
+                        <div className="flex items-center gap-2 mt-2">
+                          <Button
+                            variant="primary"
+                            size="sm"
+                            onClick={() => decideCandidate(c.id, "approve")}
+                            className="h-6 px-2.5 text-[11px]"
+                          >
+                            <Check className="h-3 w-3 mr-1" />
+                            确认
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => decideCandidate(c.id, "reject")}
+                            className="h-6 px-2.5 text-[11px] text-muted hover:text-danger"
+                          >
+                            拒绝
+                          </Button>
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -941,7 +1002,7 @@ export default function ChatPage() {
             <Button
               size="sm"
               variant="primary"
-              onClick={() => createSession()}
+              onClick={startNewChat}
               className="w-full justify-center gap-1.5 h-9 font-medium"
             >
               <Plus className="h-4 w-4" />

@@ -52,7 +52,7 @@ export async function POST(req: Request): Promise<Response> {
               ? "AI 服务鉴权失败。请到「设置」检查 API Key 与模型配置。"
               : `出错了：${err instanceof Error ? err.message : String(err)}`,
         });
-        send({ type: "done", memoriesAdded: 0 });
+        send({ type: "done", candidatesAdded: 0 });
       } finally {
         controller.close();
       }

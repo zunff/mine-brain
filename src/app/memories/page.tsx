@@ -36,7 +36,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { cn } from "@/lib/utils";
+import { assertOk, cn } from "@/lib/utils";
 
 type MemoryWithTags = MemoryRow & { tags?: string[] };
 
@@ -166,16 +166,18 @@ export default function MemoriesPage() {
     if (!content || adding) return;
     setAdding(true);
     try {
-      await fetch("/api/memories", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type: "claim", content }),
-      });
+      await assertOk(
+        await fetch("/api/memories", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ type: "claim", content }),
+        }),
+      );
       setQuickInput("");
       showToast("已成功记录一笔主张");
       load();
-    } catch {
-      showToast("添加失败", "error");
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : "添加失败", "error");
     } finally {
       setAdding(false);
     }
@@ -189,17 +191,19 @@ export default function MemoriesPage() {
         .map((t) => t.trim())
         .filter(Boolean);
 
-      await fetch("/api/memories", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          type: newType,
-          title: newTitle.trim() || undefined,
-          content: newContent.trim(),
-          theme: newTheme || undefined,
-          tags: tagList.length > 0 ? tagList : undefined,
+      await assertOk(
+        await fetch("/api/memories", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            type: newType,
+            title: newTitle.trim() || undefined,
+            content: newContent.trim(),
+            theme: newTheme || undefined,
+            tags: tagList.length > 0 ? tagList : undefined,
+          }),
         }),
-      });
+      );
 
       setNewModalOpen(false);
       setNewTitle("");
@@ -208,8 +212,8 @@ export default function MemoriesPage() {
       setNewTags("");
       showToast("记忆添加成功");
       load();
-    } catch {
-      showToast("创建失败", "error");
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : "创建失败", "error");
     }
   }
 
@@ -217,19 +221,21 @@ export default function MemoriesPage() {
     if (!actionTarget) return;
     try {
       if (actionTarget.action === "delete") {
-        await fetch(`/api/memories/${actionTarget.id}`, { method: "DELETE" });
+        await assertOk(await fetch(`/api/memories/${actionTarget.id}`, { method: "DELETE" }));
         showToast("记忆已删除");
       } else {
-        await fetch(`/api/memories/${actionTarget.id}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ status: "archived" }),
-        });
+        await assertOk(
+          await fetch(`/api/memories/${actionTarget.id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ status: "archived" }),
+          }),
+        );
         showToast("记忆已归档");
       }
       load();
-    } catch {
-      showToast("操作失败", "error");
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : "操作失败", "error");
     } finally {
       setActionTarget(null);
     }
