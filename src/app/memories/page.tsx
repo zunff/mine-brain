@@ -111,9 +111,9 @@ export default function MemoriesPage() {
   return (
     <div className="h-full overflow-y-auto">
       <div className="mx-auto max-w-3xl px-5 py-8">
-        <div className="flex items-baseline justify-between gap-4">
-          <h1 className="text-xl font-semibold tracking-tight">记忆</h1>
-          <p className="text-xs text-muted">
+        <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
+          <h1 className="shrink-0 text-xl font-semibold tracking-tight">记忆</h1>
+          <p className="min-w-0 flex-1 text-xs leading-relaxed text-muted sm:text-right">
             被推翻的主张不会删除——「你曾经怎么想」本身就是价值。
           </p>
         </div>

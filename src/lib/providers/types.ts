@@ -36,6 +36,13 @@ export type StreamChunk =
 
 export type AgentRole = "thinker" | "extractor" | "embedder";
 
+/** 角色级覆盖：三项都可独立，留空回退全局。典型用法：thinker 走 A 家、embedder 走 B 家。 */
+export interface RoleOverride {
+  model?: string;
+  baseUrl?: string;
+  apiKey?: string;
+}
+
 export interface ProviderConfig {
   baseUrl: string;
   apiKey: string;
