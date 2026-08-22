@@ -14,12 +14,26 @@ const TABLES = [
   "settings",
 ] as const;
 
-/** 全量导出为 JSON——数据主权兜底，用户随时带走全部记忆。 */
+/** 全量导出为 JSON——数据主权兜底。密钥不出导出文件：ai 配置里的 apiKey 一律脱敏。 */
 export async function GET(): Promise<Response> {
   const db = getDb();
   const dump: Record<string, unknown[]> = {};
   for (const t of TABLES) {
-    dump[t] = db.prepare(`SELECT * FROM ${t}`).all();
+    const rows = db.prepare(`SELECT * FROM ${t}`).all() as Array<Record<string, unknown>>;
+    if (t === "settings") {
+      for (const row of rows) {
+        if (row.key === "ai" && typeof row.value === "string") {
+          try {
+            const cfg = JSON.parse(row.value) as Record<string, unknown>;
+            if (typeof cfg.apiKey === "string" && cfg.apiKey) cfg.apiKey = "__REDACTED__";
+            row.value = JSON.stringify(cfg);
+          } catch {
+            /* 保持原样 */
+          }
+        }
+      }
+    }
+    dump[t] = rows;
   }
   const payload = {
     app: "mine-brain",

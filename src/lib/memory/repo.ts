@@ -115,6 +115,17 @@ export function addMessage(
   };
 }
 
+/** 更新已存在消息的内容（流式节流落库用）。 */
+export function updateMessageContent(
+  id: number,
+  content: string,
+  reasoning: string | null,
+): void {
+  getDb()
+    .prepare("UPDATE messages SET content = ?, reasoning = ? WHERE id = ?")
+    .run(content, reasoning, id);
+}
+
 export function listMessages(sessionId: number, limit = 200): MessageRow[] {
   return getDb()
     .prepare(

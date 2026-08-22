@@ -5,6 +5,7 @@ import { buildContextBundle } from "@/lib/memory/retrieve";
 import {
   addEntry,
   addMessage,
+  updateMessageContent,
   createSession,
   getAiSettings,
   getSession,
@@ -57,6 +58,14 @@ export async function* runChat(
   ];
 
   let content = "";
+  // 流式期间节流落库：中途刷新/断流不丢整条回复
+  const { id: draftId } = addMessage(session.id, "assistant", "");
+  let lastFlush = Date.now();
+  const flush = () => {
+    updateMessageContent(draftId, content, reasoning || null);
+    lastFlush = Date.now();
+  };
+
   let reasoning = "";
   for await (const chunk of provider.chatStream(messages, {
     maxTokens: 4096,
@@ -69,14 +78,15 @@ export async function* runChat(
       reasoning += chunk.text;
       yield chunk;
     }
+    if (Date.now() - lastFlush > 1200) flush();
   }
+  flush(); // 收尾强制刷一次
 
   if (!content.trim()) {
     content = "（模型这次没有返回正文，请重试或到设置页检查 AI 配置。）";
+    updateMessageContent(draftId, content, reasoning || null);
     yield { type: "content", text: content };
   }
-
-  addMessage(session.id, "assistant", content, reasoning || undefined);
 
   let memoriesAdded = 0;
   try {
