@@ -51,3 +51,4 @@ data/
 
 # root-level test screenshots
 /*.png
+.claude/skills/
