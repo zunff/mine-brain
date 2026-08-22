@@ -77,6 +77,17 @@ ${conversation}
 {"items":[{"type":"...","title":"...","content":"...","theme":"...","importance":0.5,"sentiment":0,"tags":["..."],"supersedes":null,"contradicts":[]}],"session_summary":"一句话概括这段对话"}`;
 }
 
+/**
+ * 语义守卫：只有立场类记忆能取代旧记忆（supersede）；
+ * 观察类（question/insight/pattern）「质疑」不等于「取代」——
+ * 模型误填 supersedes 时由调用方降级为 related_to 边。
+ * 这是真实 bug 的回归锚点：开放回路曾把价值陈述错误标记为已推翻。
+ */
+export function canSupersede(type: MemoryType): boolean {
+  const STANCE_TYPES: MemoryType[] = ["profile", "value", "claim", "decision"];
+  return STANCE_TYPES.includes(type);
+}
+
 /** 抽取并入库。返回新增记忆条数；抛错由调用方兜底。 */
 export async function consolidateSession(sessionId: number): Promise<number> {
   const session = getSession(sessionId);
@@ -149,10 +160,7 @@ export async function consolidateSession(sessionId: number): Promise<number> {
 
     if (!supersededAny && item.supersedes && getMemory(Number(item.supersedes))) {
       const targetId = Number(item.supersedes);
-      // 语义守卫：只有立场类记忆能取代旧记忆；观察类（question/insight/pattern）
-      // 误填时降级为 related_to——「质疑」不是「取代」。
-      const STANCE_TYPES: MemoryType[] = ["profile", "value", "claim", "decision"];
-      if (STANCE_TYPES.includes(type)) {
+      if (canSupersede(type)) {
         supersedeMemory(targetId, memoryId);
       } else {
         linkMemories(memoryId, targetId, "related_to", "观察类记忆的模型误填，已降级");

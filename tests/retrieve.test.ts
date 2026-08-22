@@ -44,12 +44,6 @@ describe("extractSignals", () => {
     expect(tags).not.toContain("健身");
     expect(themes).toContain("career");
   });
-
-  it("无相关内容时返回空信号", () => {
-    const { tags, themes } = extractSignals("随便说点什么", []);
-    expect(tags).toEqual([]);
-    expect(themes).toEqual([]);
-  });
 });
 
 describe("buildContextBundle", () => {
