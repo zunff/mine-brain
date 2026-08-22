@@ -31,10 +31,14 @@ UI (src/app 页面)
 
 用 Node 22 内置 `node:sqlite`（DatabaseSync），不用 better-sqlite3 等原生模块——Windows 零编译依赖。
 
-当前检索**不使用向量、不使用 FTS5**，靠「写入时 LLM 打的关键词标签 + 生活域 + 时近 + 重要性」打分，
-加上矛盾沿 contradicts/supersedes 边专项检索。这是刻意决策：个人规模下标签信号比弱向量更干净可靠。
+检索为**五信号融合**：标签命中 + 生活域 + 时近 + 重要性 + 向量余弦，再沿 contradicts/supersedes 边专项拉张力。
+向量只对**当前 `(model, dims)`** 生效——跨模型/维度是另一套空间，比余弦=噪音（切换须重嵌）。
 
-向量是预留能力，分两种情况（都未启用）：
-- SQLite BLOB 可存 `Float32Array` 向量（往返无损已验证），几千条内纯 JS/SQL 暴力余弦毫秒级。
-- 真正的 kNN/索引需加载 `sqlite-vec` 扩展或侧挂 LanceDB（Win 上装原生扩展会回到编译坑，故不默认启用）。
-启用条件：设置页给 embedder 角色配上模型，`resolveEmbedder()` 返回 provider 后检索自动叠加向量通道。
+向量实现（已启用）：
+- 默认接阿里云百炼 `qwen3.7-text-embedding`（OpenAI 兼容 `/embeddings`，1024 维，免费额度内零成本）。
+- 存储：`memory_embeddings(memory_id PK, model, dims, vector BLOB)`；索引 `idx_emb_model`。
+- 写入时机：会话后整理（`embedNewMemories`）与手动「重新向量化」（`/api/reindex`）。
+- 查询：`computeVectorBoostMap` 把消息向量化再与全库余弦，作为第 5 信号加进 `buildContextBundle`。
+- 降级与熔断：`embedderReady()`（需 model+key）为闸门；接口失败冷却 5 分钟；失败不影响词法检索。
+
+关键文件：src/lib/memory/vector.ts（cosine/vectorBoost）、memory_embeddings 表、/api/reindex、settings 页向量卡片。

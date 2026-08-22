@@ -28,7 +28,7 @@ type RoleKey = "thinker" | "extractor" | "embedder";
 const ROLE_META: Array<{ key: RoleKey; label: string; hint: string }> = [
   { key: "thinker", label: "thinker · 对话与思考", hint: "建议用最强的推理模型，支持 vision 更佳。" },
   { key: "extractor", label: "extractor · 记忆整理", hint: "轻量快模型即可。" },
-  { key: "embedder", label: "embedder · 向量化（预留）", hint: "需服务商支持 embeddings 端点；当前实现未使用向量。" },
+  { key: "embedder", label: "embedder · 向量化", hint: "OpenAI 兼容 embeddings 端点（默认百炼 qwen3.7）。切换模型/维度后点「重新向量化」。" },
 ];
 
 const EMPTY_ROLE = { model: "", baseUrl: "", apiKey: "" };
