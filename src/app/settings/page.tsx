@@ -7,6 +7,7 @@ interface SettingsView {
   apiKeyMasked: string;
   hasApiKey: boolean;
   model: string;
+  roles?: Partial<Record<"thinker" | "extractor" | "embedder", { model?: string }>>;
 }
 
 export default function SettingsPage() {
@@ -14,6 +15,9 @@ export default function SettingsPage() {
   const [baseUrl, setBaseUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [model, setModel] = useState("");
+  const [thinkerModel, setThinkerModel] = useState("");
+  const [extractorModel, setExtractorModel] = useState("");
+  const [embedderModel, setEmbedderModel] = useState("");
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
@@ -24,6 +28,9 @@ export default function SettingsPage() {
     setView(d);
     setBaseUrl(d.baseUrl);
     setModel(d.model);
+    setThinkerModel(d.roles?.thinker?.model ?? "");
+    setExtractorModel(d.roles?.extractor?.model ?? "");
+    setEmbedderModel(d.roles?.embedder?.model ?? "");
     setApiKey("");
   }
 
@@ -38,7 +45,16 @@ export default function SettingsPage() {
       await fetch("/api/settings", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ baseUrl, apiKey, model }),
+        body: JSON.stringify({
+          baseUrl,
+          apiKey,
+          model,
+          roles: {
+            thinker: thinkerModel,
+            extractor: extractorModel,
+            embedder: embedderModel,
+          },
+        }),
       });
       setMsg({ ok: true, text: "已保存。" });
       await load();
@@ -101,7 +117,7 @@ export default function SettingsPage() {
             />
           </Field>
 
-          <Field label="默认模型" hint="thinker / extractor 角色共用；未来可在 DB 里按角色覆盖。">
+          <Field label="默认模型" hint="所有角色的兜底模型。">
             <input
               value={model}
               onChange={(e) => setModel(e.target.value)}
@@ -109,6 +125,38 @@ export default function SettingsPage() {
               className={inputCls}
             />
           </Field>
+
+          <div className="rounded-lg border border-borderline/60 bg-surface-2/40 p-3.5">
+            <p className="text-xs text-muted">
+              角色级覆盖（留空 = 用上面的默认）。业务逻辑只声明角色，换厂商不改代码。
+            </p>
+            <div className="mt-3 space-y-3">
+              <Field label="thinker · 对话与思考" hint="建议用最强的推理模型。">
+                <input
+                  value={thinkerModel}
+                  onChange={(e) => setThinkerModel(e.target.value)}
+                  placeholder="默认"
+                  className={inputCls}
+                />
+              </Field>
+              <Field label="extractor · 记忆整理" hint="轻量快模型即可。">
+                <input
+                  value={extractorModel}
+                  onChange={(e) => setExtractorModel(e.target.value)}
+                  placeholder="默认"
+                  className={inputCls}
+                />
+              </Field>
+              <Field label="embedder · 向量化（可选）" hint="当前服务商无此能力；配置后自动启用向量检索。">
+                <input
+                  value={embedderModel}
+                  onChange={(e) => setEmbedderModel(e.target.value)}
+                  placeholder="未启用"
+                  className={inputCls}
+                />
+              </Field>
+            </div>
+          </div>
 
           <div className="flex flex-wrap items-center gap-3 pt-1">
             <button

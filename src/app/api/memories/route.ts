@@ -1,4 +1,10 @@
-import { addEntry, insertMemory, listMemories, setTags } from "@/lib/memory/repo";
+import {
+  addEntry,
+  insertMemory,
+  listMemories,
+  setTags,
+  tagsByMemoryIds,
+} from "@/lib/memory/repo";
 import type { MemoryType, MemoryStatus } from "@/lib/memory/types";
 
 export const dynamic = "force-dynamic";
@@ -8,12 +14,14 @@ export async function GET(req: Request): Promise<Response> {
   const type = url.searchParams.get("type") as MemoryType | null;
   const theme = url.searchParams.get("theme");
   const includeInactive = url.searchParams.get("all") === "1";
+  const memories = listMemories({
+    type: type ?? undefined,
+    theme: theme ?? undefined,
+    includeInactive,
+  });
+  const tagMap = tagsByMemoryIds(memories.map((m) => m.id));
   return Response.json({
-    memories: listMemories({
-      type: type ?? undefined,
-      theme: theme ?? undefined,
-      includeInactive,
-    }),
+    memories: memories.map((m) => ({ ...m, tags: tagMap.get(m.id) ?? [] })),
   });
 }
 
