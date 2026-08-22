@@ -6,6 +6,7 @@ interface RoleView {
   model?: string;
   baseUrl?: string;
   apiKeyMasked?: string;
+  dimensions?: number;
 }
 
 interface SettingsView {
@@ -23,15 +24,16 @@ interface SettingsView {
   } | null;
 }
 
-type RoleKey = "thinker" | "extractor" | "embedder";
+/** 仅对话相关角色可覆盖全局 provider；embedder 是独立能力，单独成区。 */
+type RoleKey = "thinker" | "extractor";
 
 const ROLE_META: Array<{ key: RoleKey; label: string; hint: string }> = [
   { key: "thinker", label: "thinker · 对话与思考", hint: "建议用最强的推理模型，支持 vision 更佳。" },
   { key: "extractor", label: "extractor · 记忆整理", hint: "轻量快模型即可。" },
-  { key: "embedder", label: "embedder · 向量化", hint: "OpenAI 兼容 embeddings 端点（默认百炼 qwen3.7）。切换模型/维度后点「重新向量化」。" },
 ];
 
 const EMPTY_ROLE = { model: "", baseUrl: "", apiKey: "" };
+const EMPTY_EMBED = { model: "", baseUrl: "", apiKey: "", dimensions: "" };
 
 export default function SettingsPage() {
   const [view, setView] = useState<SettingsView | null>(null);
@@ -39,8 +41,8 @@ export default function SettingsPage() {
   const [roles, setRoles] = useState<Record<RoleKey, typeof EMPTY_ROLE>>({
     thinker: { ...EMPTY_ROLE },
     extractor: { ...EMPTY_ROLE },
-    embedder: { ...EMPTY_ROLE },
   });
+  const [embed, setEmbed] = useState({ ...EMPTY_EMBED });
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [importing, setImporting] = useState(false);
@@ -55,7 +57,12 @@ export default function SettingsPage() {
     setRoles({
       thinker: { ...EMPTY_ROLE },
       extractor: { ...EMPTY_ROLE },
-      embedder: { ...EMPTY_ROLE },
+    });
+    setEmbed({
+      model: d.roles?.embedder?.model ?? "",
+      baseUrl: d.roles?.embedder?.baseUrl ?? "",
+      apiKey: "",
+      dimensions: d.roles?.embedder?.dimensions?.toString() ?? "",
     });
   }
 
@@ -70,7 +77,18 @@ export default function SettingsPage() {
       await fetch("/api/settings", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...g, roles }),
+        body: JSON.stringify({
+          ...g,
+          roles: {
+            ...roles,
+            embedder: {
+              model: embed.model,
+              baseUrl: embed.baseUrl,
+              apiKey: embed.apiKey,
+              dimensions: embed.dimensions,
+            },
+          },
+        }),
       });
       setMsg({ ok: true, text: "已保存。" });
       await load();
@@ -199,9 +217,9 @@ export default function SettingsPage() {
         </section>
 
         <section className="mt-4 space-y-3 rounded-xl border border-borderline bg-surface p-5">
-          <h2 className="text-sm font-medium">按角色覆盖</h2>
+          <h2 className="text-sm font-medium">按角色覆盖（对话相关）</h2>
           <p className="text-xs leading-relaxed text-muted">
-            三项都可独立填写（留空 = 用全局）。典型用法：thinker 用 A 家旗舰、embedder 指向本地或另一家。
+            thinker / extractor 可各自覆盖 provider（留空 = 用全局）。向量检索是独立能力，见下方。
           </p>
           {ROLE_META.map(({ key, label, hint }) => (
             <div key={key} className="rounded-lg border border-borderline/60 bg-surface-2/40 p-3.5">
@@ -248,31 +266,70 @@ export default function SettingsPage() {
           ))}
         </section>
 
-        {/* embedder 运行状态与重嵌入 */}
-        {view?.embedder && (
-          <section className="mt-4 rounded-xl border border-borderline bg-surface p-5">
-            <h2 className="text-sm font-medium">向量检索</h2>
-            <p className="mt-1.5 text-xs leading-relaxed text-muted">
-              当前 embedding：<span className="text-accent">{view.embedder.model}</span>
-              （{view.embedder.dimensions} 维 · {view.embedder.baseUrl}）
-              {view.embedder.ready
-                ? " · 已启用，检索会叠加向量信号。"
-                : " · API Key 未配置，向量信号暂未启用。"}
-            </p>
-            <div className="mt-3 flex items-center gap-3">
-              <button
-                onClick={reindex}
-                disabled={importing || !view.embedder.ready}
-                className="rounded-lg border border-borderline px-4 py-2 text-sm text-muted transition hover:border-accent/40 hover:text-foreground disabled:opacity-30"
-              >
-                {importing ? "向量化中…" : "重新向量化"}
-              </button>
+        {/* 向量检索：独立能力，保留自己的 baseUrl/key，多数对话服务商无 embeddings */}
+        <section className="mt-4 rounded-xl border border-borderline bg-surface p-5">
+          <h2 className="text-sm font-medium">向量检索（Embedder）</h2>
+          <p className="mt-1.5 text-xs leading-relaxed text-muted">
+            独立于对话 Provider——多数对话服务商没有 embeddings 端点。默认阿里云百炼
+            `qwen3.7-text-embedding`（OpenAI 兼容）。只填第一行也能生效：其余走默认/全局。
+          </p>
+          <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-4">
+            <Field label="模型">
+              <input
+                value={embed.model}
+                onChange={(e) => setEmbed((v) => ({ ...v, model: e.target.value }))}
+                placeholder={view?.embedder?.model || "qwen3.7-text-embedding"}
+                className={inputCls}
+              />
+            </Field>
+            <Field label="Base URL">
+              <input
+                value={embed.baseUrl}
+                onChange={(e) => setEmbed((v) => ({ ...v, baseUrl: e.target.value }))}
+                placeholder={view?.embedder?.baseUrl || "…/compatible-mode/v1"}
+                className={inputCls}
+              />
+            </Field>
+            <Field label="API Key" hint={view?.roles?.embedder?.apiKeyMasked}>
+              <input
+                value={embed.apiKey}
+                onChange={(e) => setEmbed((v) => ({ ...v, apiKey: e.target.value }))}
+                type="password"
+                placeholder="留空=不改"
+                className={inputCls}
+              />
+            </Field>
+            <Field label="维度" hint="改维度=换空间，需重嵌">
+              <input
+                value={embed.dimensions}
+                onChange={(e) => setEmbed((v) => ({ ...v, dimensions: e.target.value.replace(/\D/g, "").slice(0, 4) }))}
+                placeholder="1024"
+                className={inputCls}
+              />
+            </Field>
+          </div>
+          <div className="mt-3 flex flex-wrap items-center gap-3">
+            {view?.embedder && (
               <span className="text-[11px] text-muted">
-                切换模型或维度后点一次，旧向量自动失效
+                当前：
+                <span className="text-accent">{view.embedder.model}</span>
+                {" · "}
+                {view.embedder.dimensions} 维
+                {view.embedder.ready ? " · 已启用" : " · 缺少 API Key，未启用"}
               </span>
-            </div>
-          </section>
-        )}
+            )}
+            <button
+              onClick={reindex}
+              disabled={importing || !(view?.embedder?.ready)}
+              className="ml-auto rounded-lg border border-borderline px-4 py-2 text-sm text-muted transition hover:border-accent/40 hover:text-foreground disabled:opacity-30"
+            >
+              {importing ? "向量化中…" : "重新向量化"}
+            </button>
+          </div>
+          <p className="mt-2 text-[11px] text-muted">
+            切换模型或维度后点「重新向量化」；旧向量按 (model, dims) 自动失效，不参与打分。
+          </p>
+        </section>
 
         <div className="mt-5 flex flex-wrap items-center gap-3">
           <button

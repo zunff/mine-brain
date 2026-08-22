@@ -50,8 +50,8 @@ interface PutBody {
   baseUrl?: string;
   apiKey?: string;
   model?: string;
-  /** 角色覆盖；字段空串=清除该字段；三字段全空=删除该角色覆盖 */
-  roles?: Partial<Record<AgentRole, Partial<RoleOverride>>>;
+  /** 角色覆盖；字段空串=清除该字段；dimensions 可由 UI 以字符串（数字串）提交 */
+  roles?: Partial<Record<AgentRole, Partial<RoleOverride> & { dimensions?: number | string }>>;
 }
 
 /** 空字符串的 apiKey 表示「不改」。 */
@@ -62,19 +62,24 @@ export async function PUT(req: Request): Promise<Response> {
 
   const roles: AiSettings["roles"] = { ...(current.roles ?? {}) };
   for (const role of ROLES) {
-    const incoming = body.roles?.[role];
+    const incoming = body.roles?.[role] as
+      | (Partial<RoleOverride> & { dimensions?: number | string })
+      | undefined;
     if (!incoming) continue;
+    const dims = incoming.dimensions as number | string | undefined;
     const merged: RoleOverride = {
       ...roles[role],
       ...(incoming.model !== undefined && { model: incoming.model.trim() }),
       ...(incoming.baseUrl !== undefined && { baseUrl: incoming.baseUrl.trim() }),
       ...(incoming.apiKey !== undefined &&
         incoming.apiKey.trim() !== "" && { apiKey: incoming.apiKey.trim() }),
+      ...(dims !== undefined && dims !== "" && { dimensions: Number(dims) }),
     };
     // 清理空串字段
     for (const k of ["model", "baseUrl", "apiKey"] as const) {
       if (merged[k] === "") delete merged[k];
     }
+    if (dims === "" || dims === undefined) delete merged.dimensions;
     // apiKey 显式传空且原为掩码占位时不动；传 "__CLEAR__" 表示清除
     if (incoming.apiKey === "__CLEAR__") delete merged.apiKey;
     if (Object.keys(merged).length === 0) {
