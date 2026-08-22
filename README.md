@@ -2,7 +2,7 @@
 
 不是笔记工具，不是 RAG 机器人。这是一个**记得住你、会对照你的过去、敢反驳你**的长期生活思考伙伴。
 
-![对话](docs/screenshots/chat.png)
+![对话](docs/screenshots/conversation.png)
 
 ## 它做什么
 
