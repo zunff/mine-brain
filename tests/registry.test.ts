@@ -1,5 +1,15 @@
-import { describe, expect, it } from "vitest";
-import { resolveEmbedder, resolveProvider, type AiSettings } from "@/lib/providers/registry";
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  embedderReady,
+  resolveEmbedder,
+  resolveProvider,
+  type AiSettings,
+} from "@/lib/providers/registry";
+
+afterEach(() => {
+  delete process.env.MINE_BRAIN_EMBED_MODEL;
+  delete process.env.MINE_BRAIN_EMBED_API_KEY;
+});
 
 const base: AiSettings = {
   baseUrl: "https://global.example/v1",
@@ -63,22 +73,33 @@ describe("resolveProvider 角色解析", () => {
   });
 });
 
-describe("resolveEmbedder 可选能力", () => {
-  it("未配置 embedder 模型时返回 null（调用方必须降级）", () => {
-    expect(resolveEmbedder(base)).toBeNull();
-    expect(resolveEmbedder({ ...base, roles: { embedder: { apiKey: "k" } } })).toBeNull();
+describe("resolveEmbedder 可选能力（默认走 env，无 env 且无角色覆盖才为 null）", () => {
+  it("默认指向 env 的 embedding 模型（qwen3.7-text-embedding）", () => {
+    const e = resolveEmbedder(base);
+    expect(e).not.toBeNull();
+    expect(e!.config.model).toBe("qwen3.7-text-embedding");
   });
 
-  it("配置后返回独立 provider，支持指向另一家", () => {
+  it("embedderReady 是真正的降级闸门：任何来源（角色/env/全局）缺 key 即 false", () => {
+    // 全局有 key → 就绪
+    expect(embedderReady(base)).toBe(true);
+    // 全局无 key 且无 env → 就绪为 false（检索据此跳过向量信号）
+    delete process.env.MINE_BRAIN_EMBED_API_KEY;
+    expect(embedderReady({ ...base, apiKey: "" })).toBe(false);
+    // env 提供 key → 就绪
+    process.env.MINE_BRAIN_EMBED_API_KEY = "sk-x";
+    expect(embedderReady({ ...base, apiKey: "" })).toBe(true);
+  });
+
+  it("角色覆盖可整体指向另一家（model/baseUrl/apiKey），且优先级高于 env 默认", () => {
     const e = resolveEmbedder({
       ...base,
       roles: {
-        embedder: { model: "bge-m3", baseUrl: "https://local.example/v1" },
+        embedder: { model: "bge-m3", baseUrl: "https://local.example/v1", apiKey: "sk-local" },
       },
     });
-    expect(e).not.toBeNull();
     expect(e!.config.model).toBe("bge-m3");
     expect(e!.config.baseUrl).toBe("https://local.example/v1");
-    expect(e!.config.apiKey).toBe("sk-global");
+    expect(e!.config.apiKey).toBe("sk-local");
   });
 });

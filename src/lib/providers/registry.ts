@@ -10,11 +10,6 @@ export interface AiSettings {
   roles?: Partial<Record<AgentRole, RoleOverride>>;
 }
 
-/**
- * 角色解析：业务代码只声明「我要 thinker」，不感知具体厂商/模型。
- * 每个角色的 model/baseUrl/apiKey 都可独立覆盖（留空回退全局），
- * 全局值本身来自 DB 设置 > 环境变量 > 内置默认。
- */
 export function resolveProvider(settings: AiSettings, role: AgentRole): AIProvider {
   const o = settings.roles?.[role];
   const cfg: ProviderConfig = {
@@ -25,18 +20,41 @@ export function resolveProvider(settings: AiSettings, role: AgentRole): AIProvid
   return new OpenAICompatibleProvider(cfg);
 }
 
-/**
- * embedder 是可选能力：只有显式配置了模型才启用，
- * 调用方必须降级到非向量检索，绝不允许因此报错。
- */
-export function resolveEmbedder(settings: AiSettings): AIProvider | null {
+/** embedder 的有效运行时配置（角色覆盖优先，其次环境默认）。 */
+export interface EmbedderRuntime {
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  dimensions: number;
+}
+
+/** 当前生效的 embedder 运行时配置；无模型时返回 null（调用方须降级到非向量检索）。 */
+export function embedderRuntime(settings: AiSettings): EmbedderRuntime | null {
+  const env = readAiEnvConfig();
   const o = settings.roles?.embedder;
-  const model = o?.model?.trim();
+  const model = o?.model?.trim() || env.embedModel;
   if (!model) return null;
-  return new OpenAICompatibleProvider({
-    baseUrl: o?.baseUrl?.trim() || settings.baseUrl,
-    apiKey: o?.apiKey?.trim() || settings.apiKey,
+  return {
+    baseUrl: o?.baseUrl?.trim() || env.embedBaseUrl || settings.baseUrl,
+    apiKey: o?.apiKey?.trim() || env.embedApiKey || settings.apiKey,
     model,
+    dimensions: o?.dimensions ?? env.embedDimensions,
+  };
+}
+
+/** 向量可用前提：配置了模型 AND 有 key。缺 key 时调用必失败，静默跳过向量信号。 */
+export function embedderReady(settings: AiSettings): boolean {
+  const r = embedderRuntime(settings);
+  return !!r && r.apiKey.length > 0;
+}
+
+export function resolveEmbedder(settings: AiSettings): AIProvider | null {
+  const r = embedderRuntime(settings);
+  if (!r) return null;
+  return new OpenAICompatibleProvider({
+    baseUrl: r.baseUrl,
+    apiKey: r.apiKey,
+    model: r.model,
   });
 }
 

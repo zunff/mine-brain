@@ -1,5 +1,5 @@
 import { getAiSettings, setSetting } from "@/lib/memory/repo";
-import type { AiSettings } from "@/lib/providers/registry";
+import { embedderReady, embedderRuntime, type AiSettings } from "@/lib/providers/registry";
 import type { AgentRole, RoleOverride } from "@/lib/providers/types";
 
 export const dynamic = "force-dynamic";
@@ -18,11 +18,13 @@ function maskOverride(o?: RoleOverride): RoleOverride | undefined {
     model: o.model,
     baseUrl: o.baseUrl,
     apiKey: o.apiKey ? maskKey(o.apiKey) : undefined,
+    dimensions: o.dimensions,
   };
 }
 
 export async function GET(): Promise<Response> {
   const s = getAiSettings();
+  const rt = embedderRuntime(s);
   return Response.json({
     baseUrl: s.baseUrl,
     apiKeyMasked: maskKey(s.apiKey),
@@ -31,6 +33,16 @@ export async function GET(): Promise<Response> {
     roles: Object.fromEntries(
       ROLES.map((r) => [r, maskOverride(s.roles?.[r])]),
     ),
+    // embedder 生效配置与可用性：切换模型/维度后点「重新向量化」
+    embedder: rt
+      ? {
+          model: rt.model,
+          baseUrl: rt.baseUrl,
+          dimensions: rt.dimensions,
+          ready: embedderReady(s),
+          hasApiKey: Boolean(rt.apiKey),
+        }
+      : null,
   });
 }
 

@@ -36,11 +36,13 @@ export type StreamChunk =
 
 export type AgentRole = "thinker" | "extractor" | "embedder";
 
-/** 角色级覆盖：三项都可独立，留空回退全局。典型用法：thinker 走 A 家、embedder 走 B 家。 */
+/** 角色级覆盖：都可独立，留空回退全局。典型用法：thinker 走 A 家、embedder 走 B 家。 */
 export interface RoleOverride {
   model?: string;
   baseUrl?: string;
   apiKey?: string;
+  /** 仅 embedder 用：向量维度。换维度=换模型语义，需重嵌。 */
+  dimensions?: number;
 }
 
 export interface ProviderConfig {
@@ -63,7 +65,7 @@ export interface AIProvider {
     messages: ChatMessage[],
     opts?: ChatOptions,
   ): AsyncGenerator<StreamChunk>;
-  embed?(texts: string[]): Promise<number[][]>;
+  embed?(texts: string[], opts?: { dimensions?: number }): Promise<number[][]>;
 }
 
 export class ProviderError extends Error {

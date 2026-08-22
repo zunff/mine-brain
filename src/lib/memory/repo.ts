@@ -323,6 +323,54 @@ export function tagsByMemoryIds(ids: number[]): Map<number, string[]> {
   return map;
 }
 
+/* ---------------- memory embeddings（向量，模型维度记录） ---------------- */
+
+/** 写入/覆盖某记忆的当前模型向量。 */
+export function setMemoryEmbedding(
+  memoryId: number,
+  model: string,
+  dims: number,
+  vector: Float32Array,
+): void {
+  getDb()
+    .prepare(
+      "INSERT INTO memory_embeddings (memory_id, model, dims, vector, updated_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(memory_id) DO UPDATE SET model = excluded.model, dims = excluded.dims, vector = excluded.vector, updated_at = excluded.updated_at",
+    )
+    .run(memoryId, model, dims, Buffer.from(vector.buffer), nowIso());
+}
+
+export interface StoredEmbedding {
+  memory_id: number;
+  dims: number;
+  vector: Float32Array;
+}
+
+/** 取指定模型下的全部向量（跨模型向量不互通，调用方必须按 model 过滤）。 */
+export function embeddingsFor(model: string): StoredEmbedding[] {
+  const rows = getDb()
+    .prepare("SELECT memory_id, dims, vector FROM memory_embeddings WHERE model = ?")
+    .all(model) as Array<{ memory_id: number; dims: number; vector: Uint8Array }>;
+  return rows.map((r) => ({
+    memory_id: r.memory_id,
+    dims: r.dims,
+    vector: new Float32Array(r.vector.buffer.slice(r.vector.byteOffset, r.vector.byteOffset + r.vector.byteLength)),
+  }));
+}
+
+/** 当前模型下还缺向量的 active 记忆数（重嵌进度用）。 */
+export function embeddingsMissingCount(ids: number[], model: string): number {
+  if (ids.length === 0) return 0;
+  const placeholders = ids.map(() => "?").join(",");
+  const row = getDb()
+    .prepare(
+      `SELECT count(*) c FROM memories m
+       LEFT JOIN memory_embeddings e ON e.memory_id = m.id AND e.model = ?
+       WHERE m.deleted_at IS NULL AND m.status = 'active' AND m.id IN (${placeholders}) AND e.memory_id IS NULL`,
+    )
+    .get(model, ...ids) as { c: number };
+  return row.c;
+}
+
 export function allTagNames(): string[] {
   return (
     getDb().prepare("SELECT name FROM tags ORDER BY name").all() as Array<{

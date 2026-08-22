@@ -1,7 +1,7 @@
 import { resolveProvider } from "@/lib/providers/registry";
 import type { ContentPart } from "@/lib/providers/types";
 import { consolidateSession } from "@/lib/memory/consolidate";
-import { buildContextBundle } from "@/lib/memory/retrieve";
+import { buildContextBundle, computeVectorBoostMap } from "@/lib/memory/retrieve";
 import {
   addEntry,
   addMessage,
@@ -46,9 +46,10 @@ export async function* runChat(
     touchSession(session.id, { title: deriveTitle(trimmed || "图片对话") });
   }
 
-  const bundle = buildContextBundle(trimmed);
-  const history = listMessages(session.id, HISTORY_LIMIT).slice(0, -1); // 去掉刚插入的这条
   const settings = getAiSettings();
+  const vectorBoostById = await computeVectorBoostMap(settings, trimmed);
+  const bundle = buildContextBundle(trimmed, { vectorBoostById: vectorBoostById ?? undefined });
+  const history = listMessages(session.id, HISTORY_LIMIT).slice(0, -1); // 去掉刚插入的这条
   const provider = resolveProvider(settings, "thinker");
 
   const messages = [

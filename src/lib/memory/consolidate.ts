@@ -1,4 +1,9 @@
-import { resolveProvider } from "@/lib/providers/registry";
+import {
+  embedderReady,
+  embedderRuntime,
+  resolveEmbedder,
+  resolveProvider,
+} from "@/lib/providers/registry";
 import { getAiSettings } from "./repo";
 import {
   addEntry,
@@ -8,6 +13,7 @@ import {
   linkMemories,
   listMemories,
   listMessages,
+  setMemoryEmbedding,
   setTags,
   supersedeMemory,
   touchSession,
@@ -109,7 +115,8 @@ export async function consolidateSession(sessionId: number): Promise<number> {
     .map((m) => `${m.id} | ${m.type} | ${(m.title || m.content).slice(0, 70)}`)
     .join("\n");
 
-  const provider = resolveProvider(getAiSettings(), "extractor");
+  const settings = getAiSettings();
+  const provider = resolveProvider(settings, "extractor");
   const res = await provider.chat(
     [
       { role: "system", content: "你是严谨的记忆整理员，只输出合法 JSON。" },
@@ -125,6 +132,7 @@ export async function consolidateSession(sessionId: number): Promise<number> {
 
   const entryId = addEntry("chat", conversation.slice(0, 8000), sessionId);
   let inserted = 0;
+  const newMemories: Array<{ id: number; content: string }> = [];
 
   for (const item of parsed.items.slice(0, 12)) {
     if (!item.content?.trim()) continue;
@@ -147,6 +155,7 @@ export async function consolidateSession(sessionId: number): Promise<number> {
       sessionId,
     });
     inserted++;
+    newMemories.push({ id: memoryId, content: item.content.trim().slice(0, 2000) });
     setTags(memoryId, Array.isArray(item.tags) ? item.tags.map(String) : []);
 
     // 领域规则：价值观是单一演进的排名——新 value 入库时，旧的 active value
@@ -175,7 +184,35 @@ export async function consolidateSession(sessionId: number): Promise<number> {
     consolidatedUpto: Math.max(...fresh.map((m) => m.id)),
     summary: parsed.session_summary?.slice(0, 300) ?? session.summary ?? undefined,
   });
+
+  // 向量化新记忆：失败不影响整理成功，签名后静默降级（无向量 → 检索走词法信号）。
+  await embedNewMemories(settings, newMemories);
   return inserted;
+}
+
+/** 把新记忆批量嵌入并按 (model, dims) 存元数据。任何失败都不抛，交给调用方兜底。 */
+async function embedNewMemories(
+  settings: ReturnType<typeof getAiSettings>,
+  memories: Array<{ id: number; content: string }>,
+): Promise<void> {
+  if (memories.length === 0 || !embedderReady(settings)) return;
+  const rt = embedderRuntime(settings);
+  if (!rt) return;
+  try {
+    const provider = resolveEmbedder(settings);
+    if (!provider?.embed) return;
+    const vectors = await provider.embed(
+      memories.map((m) => m.content.slice(0, 4000)),
+      { dimensions: rt.dimensions },
+    );
+    for (let i = 0; i < memories.length; i++) {
+      const v = vectors[i];
+      if (!v) continue;
+      setMemoryEmbedding(memories[i].id, rt.model, v.length, new Float32Array(v));
+    }
+  } catch (err) {
+    console.error("[embed-new] skipped:", err);
+  }
 }
 
 /** 容错 JSON 解析：剥掉代码围栏、截取首尾大括号之间内容。 */

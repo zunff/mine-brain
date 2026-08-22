@@ -14,6 +14,13 @@ interface SettingsView {
   hasApiKey: boolean;
   model: string;
   roles: Record<"thinker" | "extractor" | "embedder", RoleView | undefined>;
+  embedder?: {
+    model: string;
+    baseUrl: string;
+    dimensions: number;
+    ready: boolean;
+    hasApiKey: boolean;
+  } | null;
 }
 
 type RoleKey = "thinker" | "extractor" | "embedder";
@@ -89,6 +96,21 @@ export default function SettingsPage() {
       setMsg({ ok: false, text: e instanceof Error ? e.message : String(e) });
     } finally {
       setTesting(false);
+    }
+  }
+
+  async function reindex() {
+    setImporting(true);
+    setMsg(null);
+    try {
+      const res = await fetch("/api/reindex", { method: "POST" });
+      const d = (await res.json()) as { ok: boolean; done?: number; error?: string };
+      if (!d.ok) throw new Error(d.error ?? `HTTP ${res.status}`);
+      setMsg({ ok: true, text: `向量化完成（本轮嵌入 ${d.done ?? 0} 条）。` });
+    } catch (e) {
+      setMsg({ ok: false, text: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setImporting(false);
     }
   }
 
@@ -225,6 +247,32 @@ export default function SettingsPage() {
             </div>
           ))}
         </section>
+
+        {/* embedder 运行状态与重嵌入 */}
+        {view?.embedder && (
+          <section className="mt-4 rounded-xl border border-borderline bg-surface p-5">
+            <h2 className="text-sm font-medium">向量检索</h2>
+            <p className="mt-1.5 text-xs leading-relaxed text-muted">
+              当前 embedding：<span className="text-accent">{view.embedder.model}</span>
+              （{view.embedder.dimensions} 维 · {view.embedder.baseUrl}）
+              {view.embedder.ready
+                ? " · 已启用，检索会叠加向量信号。"
+                : " · API Key 未配置，向量信号暂未启用。"}
+            </p>
+            <div className="mt-3 flex items-center gap-3">
+              <button
+                onClick={reindex}
+                disabled={importing || !view.embedder.ready}
+                className="rounded-lg border border-borderline px-4 py-2 text-sm text-muted transition hover:border-accent/40 hover:text-foreground disabled:opacity-30"
+              >
+                {importing ? "向量化中…" : "重新向量化"}
+              </button>
+              <span className="text-[11px] text-muted">
+                切换模型或维度后点一次，旧向量自动失效
+              </span>
+            </div>
+          </section>
+        )}
 
         <div className="mt-5 flex flex-wrap items-center gap-3">
           <button

@@ -97,4 +97,17 @@ CREATE TABLE IF NOT EXISTS memory_tags (
 ALTER TABLE messages ADD COLUMN images TEXT;
 `,
   },
+  {
+    id: 3,
+    sql: `
+CREATE TABLE IF NOT EXISTS memory_embeddings (
+  memory_id INTEGER PRIMARY KEY REFERENCES memories(id) ON DELETE CASCADE,
+  model TEXT NOT NULL,
+  dims INTEGER NOT NULL,
+  vector BLOB NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_emb_model ON memory_embeddings(model);
+`,
+  },
 ];

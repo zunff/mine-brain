@@ -135,6 +135,40 @@ export class OpenAICompatibleProvider implements AIProvider {
       }),
     });
   }
+
+  /**
+   * OpenAI 兼容的 /embeddings 端点（支持百炼/DashScope、Ollama 等）。
+   * 向量维度由服务商决定；调用方必须把 config.model + 实际维度一起存元数据——
+   * 不同 embedding 模型的向量空间不互通，跨模型比余弦 = 噪音（模型切换需重嵌）。
+   */
+  async embed(texts: string[], opts?: { dimensions?: number }): Promise<number[][]> {
+    const res = await fetch(`${this.config.baseUrl.replace(/\/$/, "")}/embeddings`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${this.config.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: this.config.model,
+        input: texts,
+        encoding_format: "float",
+        ...(opts?.dimensions ? { dimensions: opts.dimensions } : {}),
+      }),
+    });
+    if (!res.ok) {
+      throw new ProviderError(
+        `provider embed failed: ${res.status} ${await safeText(res)}`,
+        res.status,
+      );
+    }
+    const data = (await res.json()) as {
+      data?: Array<{ embedding: number[] }>;
+    };
+    if (!Array.isArray(data.data)) {
+      throw new ProviderError("embed response missing data[]");
+    }
+    return data.data.map((d) => d.embedding);
+  }
 }
 
 async function safeText(res: Response): Promise<string> {

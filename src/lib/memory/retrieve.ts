@@ -1,15 +1,17 @@
 import {
+  embeddingsFor,
   listMemories,
   linksFor,
   tagsByMemoryIds,
 } from "./repo";
 import { MemoryRow, THEMES } from "./types";
+import { embedderReady, embedderRuntime, resolveEmbedder, type AiSettings } from "@/lib/providers/registry";
+import { vectorBoost } from "./vector";
 
 /**
- * 检索哲学：服务深度思考，不是相似度匹配。
- * 多信号 = 标签命中 + 生活域命中 + 时近 + 重要性；矛盾与开放回路单独专项检索。
- * 当前 provider 无 embeddings，词法+结构信号已足够个人规模使用；
- * 若未来配置了 embedder，可在 score() 里加向量项，接口不变。
+ * 检索哲学：服务于深度思考，不是相似度匹配。
+ * 多信号 = 标签命中 + 生活域命中 + 时近 + 重要性 +（可选）向量余弦；
+ * 矛盾与开放回路单独专项检索。向量只对一个模型生效（跨模型是噪音）。
  */
 
 export interface ContextBundle {
@@ -23,6 +25,11 @@ export interface ContextBundle {
   openLoops: MemoryRow[];
   /** 本次命中的生活域 */
   themes: string[];
+}
+
+export interface RetrievalOpts {
+  /** 第 5 条信号：记忆 id → 余弦得分映射（由调用方按当前 embedding 模型预计算）。 */
+  vectorBoostById?: Map<number, number>;
 }
 
 const THEME_KEYWORDS: Record<string, string[]> = {
@@ -61,7 +68,7 @@ function recencyBoost(isoDate: string | null, now: Date): number {
   return 1.5 * (1 - days / 30);
 }
 
-export function buildContextBundle(message: string): ContextBundle {
+export function buildContextBundle(message: string, opts: RetrievalOpts = {}): ContextBundle {
   const all = listMemories({ limit: 2000 });
   const tagMap = tagsByMemoryIds(all.map((m) => m.id));
   const vocab = [...new Set([...tagMap.values()].flat())];
@@ -84,7 +91,8 @@ export function buildContextBundle(message: string): ContextBundle {
         tagHits * 3 +
         (m.theme && themeSet.has(m.theme) ? 2.5 : 0) +
         recencyBoost(m.created_at, now) +
-        m.importance * 2;
+        m.importance * 2 +
+        (opts.vectorBoostById?.get(m.id) ?? 0);
       if (m.type === "decision" || m.type === "question") score += 0.5;
       return { m, score };
     })
@@ -132,4 +140,40 @@ export function buildContextBundle(message: string): ContextBundle {
     .slice(0, 3);
 
   return { constitution, related, tensions, openLoops, themes };
+}
+
+/**
+ * 第 5 条信号预计算：把用户消息向量化，再与当前 embedding 模型下的全部记忆向量求余弦。
+ * 失败（无 key / 接口异常 / 向量维度不匹配）一律返回 null，调用方降级到词法信号。
+ * 只对当前离线模型生效：切换 embedding 模型后旧向量自动失效，需重嵌。
+ */
+let embedCooldownUntil = 0;
+
+export async function computeVectorBoostMap(
+  settings: AiSettings,
+  queryText: string,
+): Promise<Map<number, number> | null> {
+  if (!embedderReady(settings)) return null;
+  if (Date.now() < embedCooldownUntil) return null; // 熔断：短时间内失败过就跳过
+  const rt = embedderRuntime(settings);
+  if (!rt) return null;
+  try {
+    const provider = resolveEmbedder(settings);
+    if (!provider?.embed) return null;
+    const [qvArr] = await provider.embed([queryText.slice(0, 4000)], {
+      dimensions: rt.dimensions,
+    });
+    const qv = new Float32Array(qvArr);
+    const boost = new Map<number, number>();
+    for (const e of embeddingsFor(rt.model)) {
+      if (e.dims !== qv.length) continue; // 维度不同 = 非同一空间，跳过
+      const b = vectorBoost(qv, e.vector);
+      if (b > 0.4) boost.set(e.memory_id, b);
+    }
+    return boost;
+  } catch (err) {
+    console.error("[embed] skipped:", err);
+    embedCooldownUntil = Date.now() + 5 * 60 * 1000;
+    return null;
+  }
 }
