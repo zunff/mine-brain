@@ -1,0 +1,120 @@
+@import "tailwindcss";
+
+:root {
+  --background: #101014;
+  --surface: #17171d;
+  --surface-2: #1e1e26;
+  --border: #2a2a34;
+  --foreground: #e6e4df;
+  --muted: #8b8a94;
+  --accent: #c9a86a;
+  --accent-soft: rgba(201, 168, 106, 0.12);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-borderline: var(--border);
+  --color-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+}
+
+::selection {
+  background: rgba(201, 168, 106, 0.3);
+}
+
+/* 聊天 markdown 排版（不引 typography 插件，手写保持可控） */
+.prose-chat {
+  font-size: 14.5px;
+  line-height: 1.78;
+}
+.prose-chat > * + * {
+  margin-top: 0.7em;
+}
+.prose-chat h1,
+.prose-chat h2,
+.prose-chat h3,
+.prose-chat h4 {
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin-top: 1.2em;
+}
+.prose-chat h1 { font-size: 1.25em; }
+.prose-chat h2 { font-size: 1.15em; }
+.prose-chat h3 { font-size: 1.05em; }
+.prose-chat strong {
+  color: var(--accent);
+  font-weight: 600;
+}
+.prose-chat ul,
+.prose-chat ol {
+  padding-left: 1.4em;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35em;
+}
+.prose-chat ul { list-style: disc; }
+.prose-chat ol { list-style: decimal; }
+.prose-chat li::marker {
+  color: var(--muted);
+}
+.prose-chat blockquote {
+  border-left: 2px solid var(--accent);
+  padding-left: 0.9em;
+  color: var(--muted);
+  font-style: normal;
+}
+.prose-chat code {
+  background: var(--surface-2);
+  border-radius: 4px;
+  padding: 0.15em 0.4em;
+  font-size: 0.88em;
+}
+.prose-chat pre {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.9em 1em;
+  overflow-x: auto;
+  font-size: 13px;
+}
+.prose-chat pre code {
+  background: transparent;
+  padding: 0;
+}
+.prose-chat hr {
+  border-color: var(--border);
+}
+.prose-chat table {
+  border-collapse: collapse;
+  font-size: 0.92em;
+}
+.prose-chat th,
+.prose-chat td {
+  border: 1px solid var(--border);
+  padding: 0.35em 0.7em;
+}
+.prose-chat th {
+  background: var(--surface-2);
+}
+
+/* 细滚动条 */
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 4px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}

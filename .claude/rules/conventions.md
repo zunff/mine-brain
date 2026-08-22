@@ -1,0 +1,27 @@
+# 代码 / 数据 / Provider 约定
+
+## TypeScript 与代码风格
+
+- strict 模式，`npm run build` 通过 = 类型检查通过；改完必跑。
+- 不引入重型依赖（无 langchain、无重状态库）。新依赖需有明确理由且积极维护。
+- 组件放 `src/app/<页面>/` 或 `src/components/`；服务端逻辑一律进 `src/lib/`。
+- API 路由只做：参数校验 → 调 lib → 返回 JSON/SSE。业务逻辑不写在 route 里。
+
+## 记忆数据铁律（领域规则，违反=bug）
+
+- 所有记忆实体带 `created_at` 与适用的 `valid_from`；时间永远显式，不做隐式「最新覆盖旧」。
+- 信念/主张改变主意：旧行置 `status='superseded'`，新建行，两行间建 `contradicts` 边。永不 UPDATE 覆盖内容语义。
+- 原始文本（entries）是不可变的地面真值，整理产物（claims/insights）必须能溯源到 entry id。
+- 删除只做软删（`deleted_at`），导出/备份必须包含全部历史。
+
+## AI Provider 铁律
+
+- 业务代码里**禁止出现**模型名、base_url、api key 字面量；只能通过角色名（thinker/extractor/embedder…）调 `resolveProvider(role)`。
+- Provider 接口：`chat(messages, opts)` 必须支持流式；`embed?()` 可选（当前 provider 无此能力，代码必须容忍缺失并降级到非向量检索）。
+- 当前模型 x-preview-f-free 是推理模型：思考在 `message.reasoning_content`，正文在 `message.content`；max_tokens 给足（≥2000），否则 content 为空。
+- key 只存于 `.env.local`（gitignore）或运行时 DB settings 表，绝不入库 git。
+
+## 配置与密钥
+
+- `.env.local` 本地真实密钥（已 ignore）；`.env.example` 只放占位符（提交）。
+- 用户可在设置页改 provider 配置（存 DB settings 表），env 只是首次默认值。
