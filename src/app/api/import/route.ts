@@ -137,7 +137,7 @@ export async function POST(req: Request): Promise<Response> {
     }
 
     db.exec("COMMIT");
-    const counts: Record<string, number> = {};
+    const counts: Record<string, number> = { skippedSettings };
     for (const t of [...INSERT_ORDER, "settings"]) counts[t] = data[t]?.length ?? 0;
     return Response.json({ ok: true, backup: path.basename(backupPath), counts });
   } catch (err) {

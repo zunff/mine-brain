@@ -1,489 +1,1063 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import Link from "next/link";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import {
+  MessageSquare,
+  Plus,
+  ChevronDown,
+  ChevronRight,
+  Copy,
+  Check,
+  Trash2,
+  Edit3,
+  Image as ImageIcon,
+  X,
+  Brain,
+  Search,
+  Sparkles,
+  Bot,
+  User,
+  PanelLeftClose,
+  PanelLeft,
+  ArrowUp,
+  AlertCircle,
+  Compass,
+  HelpCircle,
+} from "lucide-react";
 import { Markdown } from "@/components/markdown";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { BrandIcon } from "@/components/brand-icon";
+import { compressImageFile } from "@/lib/image-compress";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { cn } from "@/lib/utils";
 
-interface ChatMsg {
-  role: "user" | "assistant";
+interface Message {
+  id?: number;
+  role: "user" | "assistant" | "system";
   content: string;
-  reasoning?: string | null;
+  reasoning_content?: string;
   images?: string[];
-  ts?: string;
+  created_at?: string;
 }
 
-interface SessionItem {
-  id: number;
+interface Session {
+  id: string;
   title: string;
+  created_at: string;
   updated_at: string;
+  message_count?: number;
 }
 
-const LS_KEY = "mb_last_session";
-const MAX_IMAGES = 4;
+interface StagedCandidate {
+  type: string;
+  title: string;
+  content: string;
+  theme?: string;
+  tags?: string[];
+}
 
-const SUGGESTIONS = [
-  "我最近反复在想一件事，但一直没想清楚……",
-  "帮我复盘一个最近做的决定。",
-  "有个纠结憋了很久，说出来你帮我对照一下过去。",
+function parseMsgImages(images: unknown): string[] {
+  if (!images) return [];
+  if (Array.isArray(images)) {
+    return images.filter((img): img is string => typeof img === "string" && img.length > 0);
+  }
+  if (typeof images === "string") {
+    try {
+      const parsed = JSON.parse(images);
+      if (Array.isArray(parsed)) {
+        return parsed.filter((img): img is string => typeof img === "string" && img.length > 0);
+      }
+      if (typeof parsed === "string" && parsed.length > 0) return [parsed];
+    } catch {
+      if (images.startsWith("data:") || images.startsWith("http")) return [images];
+    }
+  }
+  return [];
+}
+
+const STARTER_PROMPTS = [
+  {
+    icon: Compass,
+    title: "梳理重大决定",
+    desc: "我在考虑换工作/搬家/开启新项目，想权衡利弊与长远影响",
+  },
+  {
+    icon: Brain,
+    title: "反思价值冲突",
+    desc: "我感觉现在的节奏和我的核心价值观有冲突，帮我看看盲点",
+  },
+  {
+    icon: AlertCircle,
+    title: "走出内耗循环",
+    desc: "我又陷入了反复纠结的思维模式中，需要跳出来客观审视",
+  },
+  {
+    icon: HelpCircle,
+    title: "对照历史想法",
+    desc: "看看我过去的记录，我的想法在哪些地方悄悄发生了改变？",
+  },
 ];
 
 export default function ChatPage() {
-  const [sessions, setSessions] = useState<SessionItem[]>([]);
-  const [sessionId, setSessionId] = useState<number | null>(null);
-  const [messages, setMessages] = useState<ChatMsg[]>([]);
-  const [live, setLive] = useState<{ content: string; reasoning: string } | null>(null);
+  const [sessions, setSessions] = useState<Session[]>([]);
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+  const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [images, setImages] = useState<string[]>([]);
-  const [busy, setBusy] = useState(false);
-  const [needsOnboarding, setNeedsOnboarding] = useState(false);
-  const [toast, setToast] = useState<string | null>(null);
-  const bottomRef = useRef<HTMLDivElement>(null);
-  const fileRef = useRef<HTMLInputElement>(null);
+  const [streaming, setStreaming] = useState(false);
+  const [reasoningOpen, setReasoningOpen] = useState(true);
+  const [staged, setStaged] = useState<StagedCandidate[]>([]);
+  const [consolidating, setConsolidating] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
 
-  const refreshSessions = useCallback(async () => {
-    const res = await fetch("/api/sessions");
-    const data = (await res.json()) as { sessions: SessionItem[] };
-    setSessions(data.sessions ?? []);
+  // Dialog states for session operations
+  const [renameTarget, setRenameTarget] = useState<Session | null>(null);
+  const [renameTitle, setRenameTitle] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState<Session | null>(null);
+
+  // Copy state
+  const [copiedId, setCopiedId] = useState<number | string | null>(null);
+
+  // Toast message
+  const [toast, setToast] = useState<{ text: string; type: "success" | "error" } | null>(null);
+
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const showToast = useCallback((text: string, type: "success" | "error" = "success") => {
+    setToast({ text, type });
+    setTimeout(() => setToast(null), 3000);
   }, []);
 
-  useEffect(() => {
-    fetch("/api/onboarding")
-      .then((r) => r.json())
-      .then((d: { hasProfile: boolean }) => setNeedsOnboarding(!d.hasProfile))
-      .catch(() => {});
-    refreshSessions();
-    // 会话恢复：刷新后回到上次对话
-    const saved = Number(window.localStorage.getItem(LS_KEY));
-    if (Number.isInteger(saved) && saved > 0) openSession(saved);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, live]);
-
-  useEffect(() => {
-    if (!toast) return;
-    const t = setTimeout(() => setToast(null), 3500);
-    return () => clearTimeout(t);
-  }, [toast]);
-
-  async function openSession(id: number) {
-    if (busy) return;
-    const res = await fetch(`/api/sessions/${id}`);
-    if (!res.ok) return;
-    const data = (await res.json()) as {
-      messages: Array<ChatMsg & { images: string | null; created_at: string }>;
-    };
-    setSessionId(id);
-    window.localStorage.setItem(LS_KEY, String(id));
-    setMessages(
-      data.messages.map((m) => ({
-        role: m.role,
-        content: m.content,
-        reasoning: m.reasoning,
-        images: m.images ? (JSON.parse(m.images) as string[]) : undefined,
-        ts: m.created_at,
-      })),
-    );
-    setLive(null);
-  }
-
-  function newChat() {
-    if (busy) return;
-    setSessionId(null);
-    window.localStorage.removeItem(LS_KEY);
-    setMessages([]);
-    setLive(null);
-    setImages([]);
-  }
-
-  async function renameSession(id: number, current: string) {
-    const title = window.prompt("重命名对话", current);
-    if (!title?.trim()) return;
-    await fetch(`/api/sessions/${id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title }),
-    });
-    refreshSessions();
-  }
-
-  async function deleteSession(id: number) {
-    if (!window.confirm("删除这个对话？（记忆资产会保留）")) return;
-    await fetch(`/api/sessions/${id}`, { method: "DELETE" });
-    if (id === sessionId) newChat();
-    refreshSessions();
-  }
-
-  async function addImageFiles(files: FileList | File[]) {
-    const room = MAX_IMAGES - images.length;
-    if (room <= 0) return;
-    const picked = [...files].filter((f) => f.type.startsWith("image/")).slice(0, room);
-    for (const f of picked) {
-      if (f.size > 4 * 1024 * 1024) {
-        setToast(`图片 ${f.name} 超过 4MB，已跳过`);
-        continue;
-      }
-      const uri = await new Promise<string>((resolve, reject) => {
-        const r = new FileReader();
-        r.onload = () => resolve(String(r.result));
-        r.onerror = reject;
-        r.readAsDataURL(f);
-      });
-      setImages((prev) => (prev.length >= MAX_IMAGES ? prev : [...prev, uri]));
+  const loadSessions = useCallback(async () => {
+    try {
+      const res = await fetch("/api/sessions");
+      const data = (await res.json()) as { sessions: Session[] };
+      setSessions(data.sessions ?? []);
+      return data.sessions ?? [];
+    } catch {
+      return [];
     }
-  }
+  }, []);
 
-  async function send() {
-    const text = input.trim();
-    if ((!text && images.length === 0) || busy) return;
+  const loadMessages = useCallback(async (sessionId: string) => {
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}`);
+      const data = (await res.json()) as { messages: Message[] };
+      setMessages(data.messages ?? []);
+    } catch {
+      setMessages([]);
+    }
+  }, []);
+
+  // Initialize
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      try {
+        const res = await fetch("/api/sessions");
+        const data = (await res.json()) as { sessions: Session[] };
+        const list = data.sessions ?? [];
+        if (!active) return;
+        setSessions(list);
+        if (list.length > 0) {
+          setCurrentSessionId(list[0].id);
+          const msgRes = await fetch(`/api/sessions/${list[0].id}`);
+          const msgData = (await msgRes.json()) as { messages: Message[] };
+          if (active) {
+            setMessages(msgData.messages ?? []);
+          }
+        }
+      } catch {
+        // ignore
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  // Scroll to bottom on message updates
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, streaming]);
+
+  // Auto-resize textarea
+  useEffect(() => {
+    if (textareaRef.current) {
+      textareaRef.current.style.height = "auto";
+      textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 180)}px`;
+    }
+  }, [input]);
+
+  const selectSession = async (id: string) => {
+    setCurrentSessionId(id);
+    setMobileDrawerOpen(false);
+    await loadMessages(id);
+  };
+
+  const createSession = async (initialTitle?: string) => {
+    try {
+      const res = await fetch("/api/sessions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: initialTitle || "新对话" }),
+      });
+      const data = (await res.json()) as { session: Session };
+      if (data.session) {
+        setSessions((prev) => [data.session, ...prev]);
+        setCurrentSessionId(data.session.id);
+        setMessages([]);
+        setMobileDrawerOpen(false);
+        return data.session.id;
+      }
+    } catch {
+      showToast("创建对话失败", "error");
+    }
+    return null;
+  };
+
+  const submitRename = async () => {
+    if (!renameTarget || !renameTitle.trim()) return;
+    try {
+      const res = await fetch(`/api/sessions/${renameTarget.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: renameTitle.trim() }),
+      });
+      if (res.ok) {
+        setSessions((prev) =>
+          prev.map((s) => (s.id === renameTarget.id ? { ...s, title: renameTitle.trim() } : s))
+        );
+        showToast("重命名成功");
+      }
+    } catch {
+      showToast("重命名失败", "error");
+    } finally {
+      setRenameTarget(null);
+      setRenameTitle("");
+    }
+  };
+
+  const submitDelete = async () => {
+    if (!deleteTarget) return;
+    try {
+      const res = await fetch(`/api/sessions/${deleteTarget.id}`, {
+        method: "DELETE",
+      });
+      if (res.ok) {
+        const remaining = sessions.filter((s) => s.id !== deleteTarget.id);
+        setSessions(remaining);
+        if (currentSessionId === deleteTarget.id) {
+          if (remaining.length > 0) {
+            setCurrentSessionId(remaining[0].id);
+            loadMessages(remaining[0].id);
+          } else {
+            setCurrentSessionId(null);
+            setMessages([]);
+          }
+        }
+        showToast("对话已删除");
+      }
+    } catch {
+      showToast("删除失败", "error");
+    } finally {
+      setDeleteTarget(null);
+    }
+  };
+
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    for (const file of Array.from(files)) {
+      if (!file.type.startsWith("image/")) continue;
+      try {
+        const compressedDataUrl = await compressImageFile(file, {
+          maxWidth: 1536,
+          maxHeight: 1536,
+          quality: 0.82,
+        });
+        setImages((prev) => [...prev, compressedDataUrl]);
+      } catch {
+        showToast("图片处理失败", "error");
+      }
+    }
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  const removeImage = (index: number) => {
+    setImages((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const copyToClipboard = (text: string, id: number | string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedId(id);
+    showToast("已复制到剪贴板");
+    setTimeout(() => setCopiedId(null), 2000);
+  };
+
+  const send = async (overridePrompt?: string) => {
+    const textToSend = overridePrompt ?? input;
+    if ((!textToSend.trim() && images.length === 0) || streaming) return;
+
+    let activeSessionId = currentSessionId;
+    if (!activeSessionId) {
+      const firstLine = textToSend.trim().slice(0, 20) || "新对话";
+      activeSessionId = await createSession(firstLine);
+      if (!activeSessionId) return;
+    }
+
+    const userMsg: Message = {
+      role: "user",
+      content: textToSend.trim(),
+      images: images.length > 0 ? images : undefined,
+      created_at: new Date().toISOString(),
+    };
+
+    setMessages((prev) => [...prev, userMsg]);
     setInput("");
-    const sentImages = images;
     setImages([]);
-    setBusy(true);
-    setMessages((prev) => [
-      ...prev,
-      { role: "user", content: text || "（图片）", images: sentImages, ts: new Date().toISOString() },
-    ]);
-    setLive({ content: "", reasoning: "" });
+    setStreaming(true);
 
-    let accContent = "";
-    let accReasoning = "";
+    const assistantMsgIndex = messages.length + 1;
+    let fullReasoning = "";
+    let fullContent = "";
+
     try {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sessionId, message: text, images: sentImages }),
+        body: JSON.stringify({
+          sessionId: activeSessionId,
+          message: userMsg.content,
+          images: userMsg.images,
+        }),
       });
-      if (!res.body) throw new Error("no stream body");
+
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({ error: "未知错误" }));
+        throw new Error(errorData.error || `HTTP ${res.status}`);
+      }
+
+      if (!res.body) throw new Error("无响应数据流");
+
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
+
       while (true) {
-        const { done, value } = await reader.read();
+        const { value, done } = await reader.read();
         if (done) break;
+
         buffer += decoder.decode(value, { stream: true });
-        const parts = buffer.split("\n\n");
-        buffer = parts.pop() ?? "";
-        for (const part of parts) {
-          const line = part.trim();
-          if (!line.startsWith("data:")) continue;
-          const evt = JSON.parse(line.slice(5).trim()) as {
-            type: string;
-            text?: string;
-            sessionId?: number;
-            memoriesAdded?: number;
-          };
-          if (evt.type === "meta" && evt.sessionId) {
-            setSessionId(evt.sessionId);
-            window.localStorage.setItem(LS_KEY, String(evt.sessionId));
-          } else if (evt.type === "content" && evt.text) {
-            accContent += evt.text;
-            setLive({ content: accContent, reasoning: accReasoning });
-          } else if (evt.type === "reasoning" && evt.text) {
-            accReasoning += evt.text;
-            setLive({ content: accContent, reasoning: accReasoning });
-          } else if (evt.type === "done") {
-            setMessages((prev) => [
-              ...prev,
-              {
-                role: "assistant",
-                content: accContent,
-                reasoning: accReasoning || null,
-                ts: new Date().toISOString(),
-              },
-            ]);
-            setLive(null);
-            if ((evt.memoriesAdded ?? 0) > 0) {
-              setToast(`已沉淀 ${evt.memoriesAdded} 条新记忆`);
-              setTimeout(() => setToast(null), 3500);
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed.startsWith("data:")) continue;
+          const jsonStr = trimmed.slice(5).trim();
+          if (!jsonStr || jsonStr === "[DONE]") continue;
+
+          try {
+            const data = JSON.parse(jsonStr);
+            if (data.type === "reasoning") {
+              fullReasoning += data.text;
+            } else if (data.type === "content") {
+              fullContent += data.text;
             }
-            refreshSessions();
+
+            setMessages((prev) => {
+              const next = [...prev];
+              next[assistantMsgIndex] = {
+                role: "assistant",
+                content: fullContent,
+                reasoning_content: fullReasoning || undefined,
+                created_at: new Date().toISOString(),
+              };
+              return next;
+            });
+          } catch {
+            // ignore JSON parse errors on malformed chunks
           }
         }
       }
-    } catch (err) {
-      const fallback =
-        accContent ||
-        `连接出错：${err instanceof Error ? err.message : String(err)}。请检查「设置」里的 AI 配置。`;
-      setMessages((prev) => [...prev, { role: "assistant", content: fallback }]);
-      setLive(null);
+
+      // Update session title if it's the first message and still named "新对话"
+      const currSession = sessions.find((s) => s.id === activeSessionId);
+      if (currSession && (currSession.title === "新对话" || !currSession.title)) {
+        const newTitle = userMsg.content.slice(0, 16) || "新对话";
+        fetch(`/api/sessions/${activeSessionId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title: newTitle }),
+        }).then(() => {
+          setSessions((prev) =>
+            prev.map((s) => (s.id === activeSessionId ? { ...s, title: newTitle } : s))
+          );
+        });
+      }
+    } catch (err: unknown) {
+      const errorMsg = err instanceof Error ? err.message : "连接失败";
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          content: `⚠️ 对话出错：${errorMsg}。\n\n请检查「设置」页中的 API Key 与 Base URL 是否正确。`,
+          created_at: new Date().toISOString(),
+        },
+      ]);
+      showToast("发送失败，请检查配置", "error");
     } finally {
-      setBusy(false);
+      setStreaming(false);
     }
-  }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      send();
+    }
+  };
+
+  const triggerConsolidate = async () => {
+    if (!currentSessionId || consolidating) return;
+    setConsolidating(true);
+    try {
+      const res = await fetch("/api/consolidate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId: currentSessionId }),
+      });
+      const data = (await res.json()) as { staged?: StagedCandidate[]; count?: number };
+      if (data.staged && data.staged.length > 0) {
+        setStaged(data.staged);
+        showToast(`已提取 ${data.staged.length} 条记忆沉淀！`);
+      } else {
+        showToast("本轮对话暂无需要沉淀的重要新记忆");
+      }
+    } catch {
+      showToast("整理记忆失败", "error");
+    } finally {
+      setConsolidating(false);
+    }
+  };
+
+  const filteredSessions = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return sessions;
+    return sessions.filter((s) => s.title.toLowerCase().includes(q));
+  }, [sessions, searchQuery]);
+
+  const currentSession = useMemo(
+    () => sessions.find((s) => s.id === currentSessionId),
+    [sessions, currentSessionId]
+  );
 
   return (
-    <div className="relative flex h-full min-w-0">
-      {/* 会话列表 */}
-      <div className="hidden w-60 shrink-0 flex-col border-r border-borderline bg-surface/50 md:flex">
-        <div className="p-3">
-          <button
-            onClick={newChat}
-            disabled={busy}
-            className="w-full rounded-md border border-accent/40 bg-accent-soft px-3 py-2 text-sm text-accent transition hover:bg-accent hover:text-background disabled:opacity-40"
-          >
-            ＋ 新对话
-          </button>
+    <div className="flex h-full w-full overflow-hidden bg-background">
+      {/* Toast notification */}
+      {toast && (
+        <div
+          className={cn(
+            "fixed top-4 right-4 z-50 flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium shadow-lg transition-all animate-in fade-in slide-in-from-top-2",
+            toast.type === "success"
+              ? "bg-surface-2 border border-accent/40 text-foreground"
+              : "bg-danger text-white"
+          )}
+        >
+          {toast.type === "success" ? (
+            <Check className="h-4 w-4 text-accent" />
+          ) : (
+            <AlertCircle className="h-4 w-4" />
+          )}
+          {toast.text}
         </div>
-        <div className="group/sessions flex-1 space-y-0.5 overflow-y-auto px-2 pb-3">
-          {sessions.map((s) => (
-            <div
-              key={s.id}
-              className={`group/item relative rounded-md transition-colors ${
-                s.id === sessionId ? "bg-surface-2" : "hover:bg-surface-2/60"
-              }`}
-            >
-              <button
-                onClick={() => openSession(s.id)}
-                className={`block w-full truncate py-2 pl-3 pr-14 text-left text-[13px] ${
-                  s.id === sessionId ? "text-foreground" : "text-muted"
-                }`}
-                title={s.title}
-              >
-                {s.title}
-              </button>
-              <div className="absolute right-1.5 top-1/2 hidden -translate-y-1/2 gap-0.5 group-hover/item:flex">
-                <button
-                  onClick={() => renameSession(s.id, s.title)}
-                  title="重命名"
-                  className="rounded p-1 text-[11px] text-muted hover:text-accent"
-                >
-                  ✎
-                </button>
-                <button
-                  onClick={() => deleteSession(s.id)}
-                  title="删除"
-                  className="rounded p-1 text-[11px] text-muted hover:text-red-400"
-                >
-                  ×
-                </button>
-              </div>
+      )}
+
+      {/* Desktop Session Sidebar */}
+      <aside
+        className={cn(
+          "hidden md:flex flex-col border-r border-border bg-surface/50 transition-all duration-200 shrink-0",
+          sidebarOpen ? "w-64" : "w-0 overflow-hidden border-none"
+        )}
+      >
+        <div className="p-3 border-b border-border space-y-2">
+          <Button
+            onClick={() => createSession()}
+            className="w-full justify-start gap-2 h-9"
+            variant="primary"
+          >
+            <Plus className="h-4 w-4" />
+            <span>开启新思考</span>
+          </Button>
+
+          <div className="relative">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted pointer-events-none" />
+            <input
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="搜索历史对话..."
+              className="w-full rounded-md border border-border bg-surface pl-8 pr-3 py-1.5 text-xs text-foreground placeholder:text-muted focus:outline-none focus:border-accent"
+            />
+          </div>
+        </div>
+
+        {/* Sessions list */}
+        <div className="flex-1 overflow-y-auto p-2 space-y-1">
+          {filteredSessions.length === 0 ? (
+            <div className="p-4 text-center text-xs text-muted">
+              {searchQuery ? "未找到相关对话" : "暂无对话记录"}
             </div>
-          ))}
-          {sessions.length === 0 && (
-            <p className="px-3 py-4 text-xs leading-relaxed text-muted">
-              还没有对话。第一次深聊从下面开始。
-            </p>
+          ) : (
+            filteredSessions.map((s) => {
+              const isActive = s.id === currentSessionId;
+              return (
+                <div
+                  key={s.id}
+                  onClick={() => selectSession(s.id)}
+                  className={cn(
+                    "group relative flex items-center justify-between rounded-lg px-3 py-2 text-xs cursor-pointer transition-colors",
+                    isActive
+                      ? "bg-accent-soft text-foreground font-medium border border-accent/25"
+                      : "text-muted hover:bg-surface-2 hover:text-foreground"
+                  )}
+                >
+                  <div className="flex items-center gap-2 min-w-0 flex-1 mr-1">
+                    <MessageSquare
+                      className={cn("h-3.5 w-3.5 shrink-0", isActive ? "text-accent" : "text-muted")}
+                    />
+                    <span className="truncate">{s.title || "无标题对话"}</span>
+                  </div>
+
+                  {/* Actions */}
+                  <div className="hidden group-hover:flex items-center gap-0.5 shrink-0">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setRenameTarget(s);
+                        setRenameTitle(s.title);
+                      }}
+                      className="p-1 rounded hover:bg-surface text-muted hover:text-foreground"
+                      title="重命名"
+                    >
+                      <Edit3 className="h-3 w-3" />
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setDeleteTarget(s);
+                      }}
+                      className="p-1 rounded hover:bg-danger-soft text-muted hover:text-danger"
+                      title="删除"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </button>
+                  </div>
+                </div>
+              );
+            })
           )}
         </div>
-      </div>
+      </aside>
 
-      {/* 对话区 */}
-      <div className="flex min-w-0 flex-1 flex-col">
-        {needsOnboarding && (
-          <div className="border-b border-accent/30 bg-accent-soft px-4 py-2.5 text-[13px] text-accent">
-            大脑还是空白的。先花两分钟{" "}
-            <Link href="/onboarding" className="underline underline-offset-2">
-              告诉它你是谁
-            </Link>
-            ，它会更懂你；也可以直接开聊。
+      {/* Main Chat Area */}
+      <main className="flex-1 flex flex-col h-full min-w-0 bg-background relative">
+        {/* Top Header */}
+        <header className="h-14 border-b border-border px-4 flex items-center justify-between shrink-0 bg-surface/30 backdrop-blur-sm z-10">
+          <div className="flex items-center gap-2 min-w-0">
+            {/* Desktop Sidebar Toggle */}
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setSidebarOpen((v) => !v)}
+              className="hidden md:flex h-8 w-8 p-0"
+              title={sidebarOpen ? "折叠侧栏" : "展开侧栏"}
+            >
+              {sidebarOpen ? (
+                <PanelLeftClose className="h-4 w-4 text-muted" />
+              ) : (
+                <PanelLeft className="h-4 w-4 text-muted" />
+              )}
+            </Button>
+
+            {/* Mobile Sessions Drawer Trigger */}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setMobileDrawerOpen(true)}
+              className="md:hidden h-8 px-2.5 text-xs gap-1.5"
+            >
+              <MessageSquare className="h-3.5 w-3.5 text-accent" />
+              <span>历史 ({sessions.length})</span>
+            </Button>
+
+            {/* Current Session Title */}
+            <div className="min-w-0">
+              <h2 className="text-sm font-medium text-foreground truncate max-w-[180px] sm:max-w-xs md:max-w-md">
+                {currentSession?.title || "思考伙伴"}
+              </h2>
+            </div>
           </div>
-        )}
 
-        <div className="flex-1 overflow-y-auto">
-          <div className="mx-auto w-full max-w-3xl px-4 py-6">
-            {messages.length === 0 && !live && (
-              <div className="mt-24 text-center">
-                <h1 className="text-2xl font-semibold tracking-tight">今天在想什么？</h1>
-                <p className="mx-auto mt-3 max-w-md text-sm leading-relaxed text-muted">
-                  说模糊的念头也行，说不完整的情绪也行。
-                  这里不是搜索引擎——我会记住你，对照你的过去，也会在需要的时候反驳你。
-                </p>
-                <div className="mt-6 flex flex-wrap justify-center gap-2">
-                  {SUGGESTIONS.map((s) => (
-                    <button
-                      key={s}
-                      onClick={() => setInput(s)}
-                      className="rounded-full border border-borderline px-3.5 py-1.5 text-xs text-muted transition hover:border-accent/40 hover:text-accent"
-                    >
-                      {s}
-                    </button>
-                  ))}
-                </div>
-              </div>
+          <div className="flex items-center gap-2">
+            {messages.length > 1 && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={triggerConsolidate}
+                disabled={consolidating}
+                className="h-8 text-xs gap-1.5"
+                title="提取并沉淀本次对话的重要认知与决定"
+              >
+                <Sparkles className={cn("h-3.5 w-3.5 text-accent", consolidating && "animate-spin")} />
+                <span className="hidden sm:inline">{consolidating ? "提取中..." : "整理记忆"}</span>
+              </Button>
             )}
 
-            <div className="space-y-5">
-              {messages.map((m, i) =>
-                m.role === "user" ? (
-                  <div key={i} className="flex justify-end">
-                    <div className="max-w-[85%]">
-                      {m.images && m.images.length > 0 && (
-                        <div className="mb-1.5 flex justify-end gap-1.5">
-                          {m.images.map((src, j) => (
-                            // eslint-disable-next-line @next/next/no-img-element
-                            <img
-                              key={j}
-                              src={src}
-                              alt=""
-                              className="h-20 w-20 rounded-lg border border-borderline object-cover"
-                            />
-                          ))}
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() => createSession()}
+              className="h-8 text-xs gap-1 px-2.5"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">新对话</span>
+            </Button>
+          </div>
+        </header>
+
+        {/* Messages Stream Container */}
+        <div className="flex-1 overflow-y-auto px-3 sm:px-6 md:px-8 py-6 space-y-6">
+          {messages.length === 0 ? (
+            <div className="h-full flex flex-col items-center justify-center max-w-xl mx-auto text-center px-4 py-8">
+              <div className="mb-4">
+                <BrandIcon size={52} className="shadow-lg" />
+              </div>
+              <h3 className="text-lg font-semibold text-foreground tracking-tight">
+                你的个人深度思考伙伴
+              </h3>
+              <p className="mt-2 text-xs sm:text-sm text-muted leading-relaxed max-w-md">
+                我不奉承、不迎合。我记住你的价值观、人生焦点与反复纠结，在对话中对照过去，帮你发现盲点与认知矛盾。
+              </p>
+
+              {/* Starter Prompts Grid */}
+              <div className="mt-8 grid grid-cols-1 sm:grid-cols-2 gap-2.5 w-full text-left">
+                {STARTER_PROMPTS.map((item, idx) => {
+                  const Icon = item.icon;
+                  return (
+                    <button
+                      key={idx}
+                      onClick={() => send(item.title + "：" + item.desc)}
+                      className="group p-3.5 rounded-xl border border-border bg-surface hover:bg-surface-hover hover:border-accent/40 transition-all text-left flex flex-col justify-between"
+                    >
+                      <div className="flex items-center gap-2 mb-1.5">
+                        <Icon className="h-4 w-4 text-accent" />
+                        <span className="text-xs font-medium text-foreground group-hover:text-accent transition-colors">
+                          {item.title}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-muted leading-relaxed line-clamp-2">
+                        {item.desc}
+                      </p>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ) : (
+            <div className="max-w-3xl mx-auto space-y-6">
+              {messages.map((msg, idx) => {
+                const isUser = msg.role === "user";
+                const isStreamingCurrent = streaming && idx === messages.length - 1;
+
+                return (
+                  <div
+                    key={idx}
+                    className={cn(
+                      "flex gap-3 group animate-in fade-in duration-200",
+                      isUser ? "flex-row-reverse" : "flex-row"
+                    )}
+                  >
+                    {/* Avatar */}
+                    <div
+                      className={cn(
+                        "h-8 w-8 rounded-full flex items-center justify-center shrink-0 mt-0.5 border text-xs font-medium",
+                        isUser
+                          ? "bg-accent text-accent-foreground border-accent"
+                          : "bg-surface-2 border-border text-foreground"
+                      )}
+                    >
+                      {isUser ? <User className="h-4 w-4" /> : <Bot className="h-4 w-4 text-accent" />}
+                    </div>
+
+                    {/* Content Box */}
+                    <div
+                      className={cn(
+                        "flex flex-col max-w-[88%] sm:max-w-[82%]",
+                        isUser ? "items-end" : "items-start w-full min-w-0"
+                      )}
+                    >
+                      {/* Attached Images (if user sent images) */}
+                      {(() => {
+                        const attachedImages = parseMsgImages(msg.images);
+                        return attachedImages.length > 0 ? (
+                          <div className={cn("flex flex-wrap gap-2 mb-2", isUser && "justify-end")}>
+                            {attachedImages.map((img, i) => (
+                              <img
+                                key={i}
+                                src={img}
+                                alt="attached"
+                                className="max-h-48 max-w-xs rounded-xl border border-border/80 object-cover shadow-xs"
+                              />
+                            ))}
+                          </div>
+                        ) : null;
+                      })()}
+
+                      {/* Reasoning Box (Thinker step) */}
+                      {!isUser && msg.reasoning_content && (
+                        <div className="w-full mb-3 rounded-xl border border-border/60 bg-surface/60 overflow-hidden text-xs">
+                          <button
+                            onClick={() => setReasoningOpen((v) => !v)}
+                            className="w-full px-3.5 py-2 flex items-center justify-between text-muted hover:text-foreground bg-surface-2/40 transition-colors cursor-pointer"
+                          >
+                            <span className="flex items-center gap-1.5 font-medium tracking-wide">
+                              <Brain className="h-3.5 w-3.5 text-accent" />
+                              <span>对照与深度思考过程</span>
+                              {isStreamingCurrent && (
+                                <span className="inline-block h-1.5 w-1.5 rounded-full bg-accent animate-ping" />
+                              )}
+                            </span>
+                            <div className="flex items-center gap-1 text-[11px] text-muted">
+                              <span>{reasoningOpen ? "收起思考" : "展开思考"}</span>
+                              {reasoningOpen ? (
+                                <ChevronDown className="h-3.5 w-3.5" />
+                              ) : (
+                                <ChevronRight className="h-3.5 w-3.5" />
+                              )}
+                            </div>
+                          </button>
+                          {reasoningOpen && (
+                            <div className="p-3.5 border-t border-border/40 font-mono text-[11px] text-muted leading-relaxed whitespace-pre-wrap max-h-60 overflow-y-auto bg-background/30">
+                              {msg.reasoning_content}
+                            </div>
+                          )}
                         </div>
                       )}
-                      <div className="whitespace-pre-wrap rounded-xl rounded-br-sm bg-surface-2 px-4 py-2.5 text-[14px] leading-relaxed">
-                        {m.content}
+
+                      {/* Bubble */}
+                      <div
+                        className={cn(
+                          "rounded-2xl px-4 py-3 leading-relaxed transition-all",
+                          isUser
+                            ? "bg-surface-2 border border-border text-foreground font-normal rounded-tr-xs shadow-xs text-sm"
+                            : "bg-surface border border-border/70 text-foreground rounded-tl-xs shadow-xs text-[14.5px] w-full"
+                        )}
+                      >
+                        {isUser ? (
+                          <div className="whitespace-pre-wrap">{msg.content}</div>
+                        ) : (
+                          <div className="prose-chat">
+                            <Markdown content={msg.content || (isStreamingCurrent ? "正在深思..." : "")} />
+                            {isStreamingCurrent && (
+                              <span className="inline-block h-3.5 w-1.5 bg-accent ml-1 animate-pulse align-middle" />
+                            )}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Message footer & copy action */}
+                      <div
+                        className={cn(
+                          "flex items-center gap-2 mt-1.5 px-1 text-[10px] text-muted",
+                          isUser ? "flex-row-reverse" : "flex-row"
+                        )}
+                      >
+                        {msg.created_at && (
+                          <span>
+                            {new Date(msg.created_at).toLocaleTimeString([], {
+                              hour: "2-digit",
+                              minute: "2-digit",
+                            })}
+                          </span>
+                        )}
+                        {!isUser && msg.content && (
+                          <button
+                            onClick={() => copyToClipboard(msg.content, idx)}
+                            className="opacity-0 group-hover:opacity-100 transition-opacity p-0.5 hover:text-foreground"
+                            title="复制内容"
+                          >
+                            {copiedId === idx ? (
+                              <Check className="h-3 w-3 text-accent" />
+                            ) : (
+                              <Copy className="h-3 w-3" />
+                            )}
+                          </button>
+                        )}
                       </div>
                     </div>
                   </div>
-                ) : (
-                  <AssistantBubble key={i} msg={m} />
-                ),
-              )}
-              {live && (
-                <AssistantBubble
-                  msg={{ role: "assistant", content: live.content, reasoning: live.reasoning }}
-                  streaming
-                />
-              )}
-            </div>
-            <div ref={bottomRef} />
-          </div>
-        </div>
+                );
+              })}
 
-        {/* 输入区 */}
-        <div className="border-t border-borderline bg-surface/60 p-3">
-          {images.length > 0 && (
-            <div className="mx-auto mb-2 flex max-w-3xl gap-2">
-              {images.map((src, i) => (
-                <div key={i} className="relative">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={src}
-                    alt=""
-                    className="h-16 w-16 rounded-lg border border-borderline object-cover"
-                  />
-                  <button
-                    onClick={() => setImages((prev) => prev.filter((_, j) => j !== i))}
-                    className="absolute -right-1.5 -top-1.5 h-5 w-5 rounded-full border border-borderline bg-background text-xs text-muted hover:text-red-400"
-                    aria-label="移除图片"
-                  >
-                    ×
-                  </button>
+              {/* Staged candidates card if consolidation produced memories */}
+              {staged.length > 0 && (
+                <div className="my-6 p-4 rounded-xl border border-accent/40 bg-accent-soft/40 animate-in fade-in">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2 text-xs font-semibold text-accent">
+                      <Sparkles className="h-4 w-4" />
+                      <span>本次对话提炼出的记忆沉淀（已存入暂存库）</span>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setStaged([])}
+                      className="h-6 w-6 p-0"
+                    >
+                      <X className="h-3.5 w-3.5 text-muted" />
+                    </Button>
+                  </div>
+                  <div className="space-y-2 mt-3">
+                    {staged.map((c, i) => (
+                      <div key={i} className="p-2.5 rounded-lg bg-surface border border-border text-xs">
+                        <div className="flex items-center gap-1.5 text-muted mb-1">
+                          <Badge variant="accent" className="text-[10px] py-0 px-1.5">
+                            {c.type}
+                          </Badge>
+                          <span className="font-medium text-foreground">{c.title}</span>
+                        </div>
+                        <p className="text-muted leading-relaxed text-[11px]">{c.content}</p>
+                      </div>
+                    ))}
+                  </div>
                 </div>
-              ))}
+              )}
+              <div ref={messagesEndRef} />
             </div>
           )}
-          <div className="mx-auto flex max-w-3xl items-end gap-2">
-            <input
-              ref={fileRef}
-              type="file"
-              accept="image/*"
-              multiple
-              hidden
-              onChange={(e) => e.target.files && addImageFiles(e.target.files)}
-            />
-            <button
-              onClick={() => fileRef.current?.click()}
-              disabled={busy || images.length >= MAX_IMAGES}
-              title="添加图片"
-              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-borderline text-lg text-muted transition hover:border-accent/40 hover:text-accent disabled:opacity-30"
-            >
-              ＋
-            </button>
-            <textarea
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onPaste={(e) => {
-                const files = [...e.clipboardData.items]
-                  .filter((it) => it.kind === "file")
-                  .map((it) => it.getAsFile())
-                  .filter((f): f is File => !!f);
-                if (files.length > 0) {
-                  e.preventDefault();
-                  addImageFiles(files);
-                }
-              }}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
-                  e.preventDefault();
-                  send();
-                }
-              }}
-              rows={Math.min(5, Math.max(1, input.split("\n").length))}
-              placeholder="把此刻的想法丢进来……（Enter 发送，Shift+Enter 换行，可粘贴截图）"
-              className="max-h-36 min-h-[44px] flex-1 resize-none rounded-lg border border-borderline bg-background px-3.5 py-2.5 text-[14px] leading-relaxed outline-none placeholder:text-muted/60 focus:border-accent/50"
-              disabled={busy}
-            />
-            <button
-              onClick={send}
-              disabled={busy || (!input.trim() && images.length === 0)}
-              className="h-11 shrink-0 rounded-lg bg-accent px-5 text-sm font-medium text-background transition hover:opacity-90 disabled:opacity-30"
-            >
-              {busy ? "思考中…" : "发送"}
-            </button>
+        </div>
+
+        {/* Input Bar */}
+        <div className="p-3 sm:p-4 bg-background/95 backdrop-blur border-t border-border">
+          <div className="max-w-3xl mx-auto">
+            {/* Image Preview strip */}
+            {images.length > 0 && (
+              <div className="flex items-center gap-2 mb-2 p-2 rounded-lg bg-surface border border-border overflow-x-auto">
+                {images.map((img, idx) => (
+                  <div key={idx} className="relative group shrink-0">
+                    <img
+                      src={img}
+                      alt="preview"
+                      className="h-14 w-14 rounded object-cover border border-border"
+                    />
+                    <button
+                      onClick={() => removeImage(idx)}
+                      className="absolute -top-1.5 -right-1.5 h-4 w-4 rounded-full bg-danger text-white flex items-center justify-center text-[10px] shadow"
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="relative rounded-2xl border border-border bg-surface focus-within:border-accent/70 focus-within:ring-1 focus-within:ring-accent/40 transition-all">
+              <textarea
+                ref={textareaRef}
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={handleKeyDown}
+                rows={1}
+                placeholder="说说你最近的纠结、重大决定或真实想法..."
+                className="w-full resize-none bg-transparent px-4 pt-3.5 pb-10 text-sm text-foreground placeholder:text-muted/60 focus:outline-none max-h-44 min-h-[48px]"
+              />
+
+              <div className="absolute bottom-2.5 left-3 right-3 flex items-center justify-between">
+                <div className="flex items-center gap-1">
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    className="hidden"
+                    onChange={handleImageUpload}
+                  />
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="h-7 w-7 p-0 text-muted hover:text-foreground"
+                    title="上传图片/截图"
+                  >
+                    <ImageIcon className="h-4 w-4" />
+                  </Button>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <span className="hidden md:inline text-[11px] text-muted/60">
+                    Shift+Enter 换行
+                  </span>
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    onClick={() => send()}
+                    disabled={(!input.trim() && images.length === 0) || streaming}
+                    className="h-8 w-8 p-0 rounded-full shrink-0"
+                  >
+                    <ArrowUp className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
-      </div>
+      </main>
 
-      {/* 移动端新对话入口 */}
-      <button
-        onClick={newChat}
-        disabled={busy}
-        className="fixed bottom-20 right-4 z-10 h-12 w-12 rounded-full border border-accent/40 bg-accent-soft text-lg text-accent md:hidden"
-        aria-label="新对话"
-      >
-        ＋
-      </button>
+      {/* Mobile Sessions Drawer */}
+      <Dialog open={mobileDrawerOpen} onOpenChange={setMobileDrawerOpen}>
+        <DialogContent className="max-w-md w-[92vw] p-5">
+          <DialogHeader className="pr-8">
+            <DialogTitle className="flex items-center gap-2">
+              <MessageSquare className="h-4 w-4 text-accent" />
+              <span>历史对话</span>
+              <span className="text-xs font-normal text-muted">({sessions.length})</span>
+            </DialogTitle>
+          </DialogHeader>
 
-      {toast && (
-        <div className="fixed bottom-24 left-1/2 z-50 -translate-x-1/2 rounded-full border border-accent/40 bg-surface px-4 py-2 text-xs text-accent shadow-lg">
-          {toast}
-        </div>
-      )}
-    </div>
-  );
-}
+          <div className="space-y-2.5 mt-1">
+            <Button
+              size="sm"
+              variant="primary"
+              onClick={() => createSession()}
+              className="w-full justify-center gap-1.5 h-9 font-medium"
+            >
+              <Plus className="h-4 w-4" />
+              <span>开启新对话</span>
+            </Button>
 
-function AssistantBubble({
-  msg,
-  streaming,
-}: {
-  msg: ChatMsg;
-  streaming?: boolean;
-}) {
-  const [copied, setCopied] = useState(false);
-  async function copy() {
-    try {
-      await navigator.clipboard.writeText(msg.content);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {
-      /* 忽略 */
-    }
-  }
-  return (
-    <div className="group/msg flex gap-3">
-      <div className="mt-1 h-7 w-7 shrink-0 rounded-full border border-accent/50 bg-accent-soft pt-0.5 text-center text-sm leading-none text-accent">
-        ◇
-      </div>
-      <div className="min-w-0 max-w-[90%]">
-        {msg.reasoning && (
-          <details className="mb-2">
-            <summary className="cursor-pointer select-none text-xs text-muted transition-colors hover:text-accent">
-              思考过程 {streaming ? "…" : ""}
-            </summary>
-            <div className="mt-1.5 max-h-48 overflow-y-auto whitespace-pre-wrap rounded-md border border-borderline/60 bg-surface px-3 py-2 text-xs leading-relaxed text-muted">
-              {msg.reasoning}
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted pointer-events-none" />
+              <input
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="搜索历史对话..."
+                className="w-full rounded-lg border border-border bg-surface pl-8 pr-3 py-2 text-xs text-foreground placeholder:text-muted/60 focus:outline-none focus:border-accent"
+              />
             </div>
-          </details>
-        )}
-        {msg.content ? (
-          <Markdown content={msg.content} />
-        ) : streaming ? (
-          <span className="text-sm text-muted">…</span>
-        ) : null}
-        {!streaming && msg.content && (
-          <button
-            onClick={copy}
-            className="mt-1.5 text-[11px] text-transparent transition-colors group-hover/msg:text-muted hover:!text-accent"
-          >
-            {copied ? "已复制" : "复制"}
-          </button>
-        )}
-      </div>
+          </div>
+
+          <div className="max-h-72 overflow-y-auto space-y-1 my-3 pr-1">
+            {filteredSessions.length === 0 ? (
+              <div className="py-8 text-center text-xs text-muted">暂无历史记录</div>
+            ) : (
+              filteredSessions.map((s) => {
+                const isActive = s.id === currentSessionId;
+                return (
+                  <div
+                    key={s.id}
+                    onClick={() => selectSession(s.id)}
+                    className={cn(
+                      "flex items-center justify-between rounded-lg p-3 text-xs cursor-pointer",
+                      isActive
+                        ? "bg-accent-soft text-accent font-medium border border-accent/30"
+                        : "bg-surface text-foreground hover:bg-surface-2"
+                    )}
+                  >
+                    <div className="flex items-center gap-2 min-w-0 flex-1 mr-2">
+                      <MessageSquare className="h-4 w-4 shrink-0" />
+                      <span className="truncate">{s.title || "无标题对话"}</span>
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setMobileDrawerOpen(false);
+                          setRenameTarget(s);
+                          setRenameTitle(s.title);
+                        }}
+                        className="p-1.5 rounded hover:bg-surface-2 text-muted"
+                      >
+                        <Edit3 className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setMobileDrawerOpen(false);
+                          setDeleteTarget(s);
+                        }}
+                        className="p-1.5 rounded hover:bg-danger-soft text-muted hover:text-danger"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Rename Session Dialog */}
+      <Dialog open={!!renameTarget} onOpenChange={(open) => !open && setRenameTarget(null)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>重命名对话</DialogTitle>
+            <DialogDescription>为这段思考指定一个清晰的标题</DialogDescription>
+          </DialogHeader>
+          <div className="py-3">
+            <input
+              value={renameTitle}
+              onChange={(e) => setRenameTitle(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && submitRename()}
+              placeholder="输入对话标题..."
+              autoFocus
+              className="w-full rounded-lg border border-border bg-surface px-3.5 py-2.5 text-sm outline-none focus:border-accent"
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => setRenameTarget(null)}>
+              取消
+            </Button>
+            <Button variant="primary" size="sm" onClick={submitRename}>
+              保存
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Session Dialog */}
+      <Dialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>删除对话</DialogTitle>
+            <DialogDescription>
+              确定要删除「{deleteTarget?.title}」吗？对话中的消息将无法恢复（已提取至记忆库的内容仍会保留）。
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => setDeleteTarget(null)}>
+              取消
+            </Button>
+            <Button variant="danger" size="sm" onClick={submitDelete}>
+              确认删除
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

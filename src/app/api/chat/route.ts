@@ -4,8 +4,9 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
 interface ChatBody {
-  sessionId?: number | null;
+  sessionId?: number | string | null;
   message?: string;
+  content?: string;
   /** data URI 图片，最多 4 张（vision） */
   images?: string[];
 }
@@ -19,12 +20,18 @@ export async function POST(req: Request): Promise<Response> {
   } catch {
     return Response.json({ error: "invalid json" }, { status: 400 });
   }
+  const rawMessage = (body.message ?? body.content ?? "").trim();
   const images = (body.images ?? []).filter(
     (u) => u.startsWith("data:image/") && u.length < MAX_IMAGE_BYTES,
   );
-  if (!body.message?.trim() && images.length === 0) {
+  if (!rawMessage && images.length === 0) {
     return Response.json({ error: "message required" }, { status: 400 });
   }
+
+  const numericSessionId =
+    body.sessionId != null && body.sessionId !== "" && !Number.isNaN(Number(body.sessionId))
+      ? Number(body.sessionId)
+      : null;
 
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
@@ -33,7 +40,7 @@ export async function POST(req: Request): Promise<Response> {
         controller.enqueue(encoder.encode(`data: ${JSON.stringify(evt)}\n\n`));
       };
       try {
-        for await (const evt of runChat(body.sessionId ?? null, body.message ?? "", images)) {
+        for await (const evt of runChat(numericSessionId, rawMessage, images)) {
           send(evt);
         }
       } catch (err) {

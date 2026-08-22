@@ -14,7 +14,23 @@ export async function GET(
   }
   const session = getSession(sessionId);
   if (!session) return Response.json({ error: "not found" }, { status: 404 });
-  return Response.json({ session, messages: listMessages(sessionId) });
+  const rawMessages = listMessages(sessionId);
+  const messages = rawMessages.map((m) => {
+    let images: string[] = [];
+    if (m.images) {
+      try {
+        const parsed = JSON.parse(m.images);
+        if (Array.isArray(parsed)) images = parsed;
+        else if (typeof parsed === "string") images = [parsed];
+      } catch {
+        if (typeof m.images === "string" && (m.images.startsWith("data:") || m.images.startsWith("http"))) {
+          images = [m.images];
+        }
+      }
+    }
+    return { ...m, images };
+  });
+  return Response.json({ session, messages });
 }
 
 interface PatchBody {

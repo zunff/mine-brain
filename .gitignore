@@ -48,7 +48,13 @@ data/
 
 # playwright-cli artifacts
 .playwright-cli/
+playwright-screenshots/
+scripts/verify-ui.mjs
+scripts/test-session-flow.mjs
+scripts/test-theme-refresh.mjs
 
 # root-level test screenshots
 /*.png
 .claude/skills/
+
+.codegraph/
