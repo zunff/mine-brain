@@ -40,7 +40,9 @@ Next.js App Router (React + TS + Tailwind)
 └─ data/               SQLite 数据库（gitignored，你的全部资产）
 ```
 
-检索哲学：服务于深度思考而非相似度匹配——标签/生活域命中 + 时近 + 重要性 + 沿 contradicts/supersedes 边专项拉取张力素材；若配置了 embedder 则自动叠加向量通道。
+检索哲学：服务于深度思考而非相似度匹配——标签/生活域命中 + 时近 + 重要性 + 沿 contradicts/supersedes 边专项拉取张力素材。
+向量检索是**预留方向，当前实现未使用**：等你所用的服务商暴露 embeddings 端点（或本地起一个 embedding 服务）后，
+再实现「嵌入 + 余弦信号 + 模型切换重嵌」的完整闭环。届时设置页给 embedder 配好模型即自动生效。
 
 ## 记忆模型
 

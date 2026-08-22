@@ -21,7 +21,7 @@ type RoleKey = "thinker" | "extractor" | "embedder";
 const ROLE_META: Array<{ key: RoleKey; label: string; hint: string }> = [
   { key: "thinker", label: "thinker · 对话与思考", hint: "建议用最强的推理模型，支持 vision 更佳。" },
   { key: "extractor", label: "extractor · 记忆整理", hint: "轻量快模型即可。" },
-  { key: "embedder", label: "embedder · 向量化（可选）", hint: "配置后自动启用向量检索；可指向另一家服务商。" },
+  { key: "embedder", label: "embedder · 向量化（预留）", hint: "需服务商支持 embeddings 端点；当前实现未使用向量。" },
 ];
 
 const EMPTY_ROLE = { model: "", baseUrl: "", apiKey: "" };
