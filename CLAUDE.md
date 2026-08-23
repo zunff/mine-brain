@@ -3,14 +3,15 @@
 个人生活向「第二大脑 / 思考伙伴」——记住用户的价值观、人生阶段、反复纠结与重要决定，
 在对话中主动对照过去、指出矛盾与盲点，而不是迎合。**不是技术知识库，不是普通笔记工具，不是 RAG 文档机器人。**
 
-技术栈：Next.js App Router + React + TypeScript + Tailwind · 数据库 Node 内置 `node:sqlite`（SQLite，含 FTS5，可选用）· 检索为五信号融合（标签/生活域/时近/重要性/向量余弦）· AI 调用全部经 Provider 抽象（OpenAI 兼容协议）。
+技术栈：Next.js App Router + React + TypeScript + Tailwind · 包管理 pnpm（Node ≥22，本机用 n 切换版本）· 数据库 Node 内置 `node:sqlite`（SQLite，含 FTS5，可选用）· 检索为五信号融合（标签/生活域/时近/重要性/向量余弦）· AI 调用全部经 Provider 抽象（OpenAI 兼容协议）。
 
 ## 常用命令
 
 ```bash
-npm run dev        # 开发服务器 http://localhost:3000
-npm run build      # 生产构建（改动后必跑，作为类型检查）
-npm run lint       # ESLint
+pnpm dev        # 开发服务器 http://localhost:3000
+pnpm build      # 生产构建（改动后必跑，作为类型检查）
+pnpm lint       # ESLint
+pnpm test       # vitest 单测
 ```
 
 UI 改动必须用 playwright-cli 打开页面截图验证后再报告完成（见 .claude/rules/workflow.md）。

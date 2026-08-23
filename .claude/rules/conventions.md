@@ -2,7 +2,7 @@
 
 ## TypeScript 与代码风格
 
-- strict 模式，`npm run build` 通过 = 类型检查通过；改完必跑。
+- strict 模式，`pnpm build` 通过 = 类型检查通过；改完必跑。包管理用 pnpm（锁文件 pnpm-lock.yaml），Node ≥22（本机 n 切换，CI/Docker 固定 Node 24）。
 - 不引入重型依赖（无 langchain、无重状态库）。新依赖需有明确理由且积极维护。
 - 组件放 `src/app/<页面>/` 或 `src/components/`；服务端逻辑一律进 `src/lib/`。
 - API 路由只做：参数校验 → 调 lib → 返回 JSON/SSE。业务逻辑不写在 route 里。
