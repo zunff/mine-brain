@@ -1,0 +1,20 @@
+# 服务器上的编排文件：拉取 GHCR 镜像运行（镜像由 GitHub Actions 自动构建推送）。
+# 本地想直接构建可把 image 换成 build: .
+services:
+  mine-brain:
+    image: ghcr.io/zunff/mine-brain:latest
+    container_name: mine-brain
+    restart: unless-stopped
+    ports:
+      - "8088:3000"
+    volumes:
+      # SQLite 数据库持久化目录（含全部记忆数据，备份即备份此目录）
+      - ./data:/app/data
+    env_file:
+      - .env.production
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
