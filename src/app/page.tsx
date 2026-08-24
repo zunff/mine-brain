@@ -25,6 +25,8 @@ import {
   Compass,
   HelpCircle,
   Globe,
+  RotateCcw,
+  Layers,
 } from "lucide-react";
 import { Markdown } from "@/components/markdown";
 import { Button } from "@/components/ui/button";
@@ -47,15 +49,28 @@ interface WebSourceLite {
   publishedDate?: string | null;
 }
 
+interface RetrievedMemory {
+  id: number;
+  title: string;
+  type: string;
+  theme?: string | null;
+  content: string;
+  relation?: "constitution" | "related" | "tension" | "openLoop";
+}
+
 interface Message {
   id?: number;
   role: "user" | "assistant" | "system";
   content: string;
   reasoning_content?: string;
+  reasoning_duration?: number;
   images?: string[];
   created_at?: string;
   /** 本轮联网参考的外部资料（仅当次会话内存中，不持久化） */
   webSources?: WebSourceLite[];
+  /** 本轮调取的历史记忆与生活域 */
+  retrievedMemories?: RetrievedMemory[];
+  retrievedThemes?: string[];
 }
 
 interface Session {
@@ -124,12 +139,20 @@ export default function ChatPage() {
   const [input, setInput] = useState("");
   const [images, setImages] = useState<string[]>([]);
   const [streaming, setStreaming] = useState(false);
-  const [reasoningOpen, setReasoningOpen] = useState(true);
   const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [consolidating, setConsolidating] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
+
+  // 独立的思考框折叠状态（按消息索引），流式中当前消息默认展开
+  const [expandedReasoningMap, setExpandedReasoningMap] = useState<Record<number, boolean>>({});
+  // 独立的记忆检索折叠状态（按消息索引）
+  const [expandedContextMap, setExpandedContextMap] = useState<Record<number, boolean>>({});
+  // 流式过程中的实时动态状态文案（调取记忆中 / 联网检索中 / 深度思考中）
+  const [streamingStatus, setStreamingStatus] = useState<string>("");
+  // 思考耗时实时秒数（计时器）
+  const [streamingElapsed, setStreamingElapsed] = useState<number>(0);
 
   // 联网开关：配置了搜索 key 才出现；记住上次的选择（localStorage 只存偏好）
   const [webOn, setWebOn] = useState(false);
@@ -149,6 +172,7 @@ export default function ChatPage() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
 
   const showToast = useCallback((text: string, type: "success" | "error" = "success") => {
     setToast({ text, type });
@@ -398,9 +422,24 @@ export default function ChatPage() {
     setTimeout(() => setCopiedId(null), 2000);
   };
 
-  const send = async (overridePrompt?: string) => {
+  const toggleReasoning = (msgIndex: number) => {
+    setExpandedReasoningMap((prev) => ({
+      ...prev,
+      [msgIndex]: !prev[msgIndex],
+    }));
+  };
+
+  const toggleContext = (msgIndex: number) => {
+    setExpandedContextMap((prev) => ({
+      ...prev,
+      [msgIndex]: !prev[msgIndex],
+    }));
+  };
+
+  const send = async (overridePrompt?: string, overrideImages?: string[]) => {
     const textToSend = overridePrompt ?? input;
-    if ((!textToSend.trim() && images.length === 0) || streaming) return;
+    const imgsToSend = overrideImages ?? images;
+    if ((!textToSend.trim() && imgsToSend.length === 0) || streaming) return;
 
     let activeSessionId = currentSessionId;
     if (!activeSessionId) {
@@ -412,7 +451,7 @@ export default function ChatPage() {
     const userMsg: Message = {
       role: "user",
       content: textToSend.trim(),
-      images: images.length > 0 ? images : undefined,
+      images: imgsToSend.length > 0 ? imgsToSend : undefined,
       created_at: new Date().toISOString(),
     };
 
@@ -420,11 +459,27 @@ export default function ChatPage() {
     setInput("");
     setImages([]);
     setStreaming(true);
+    setStreamingStatus("正在调取历史记忆与价值观...");
+    setStreamingElapsed(0);
+
+    const startTime = Date.now();
+    let reasoningStartTime: number | null = null;
+    let reasoningEndTime: number | null = null;
+
+    if (timerRef.current) clearInterval(timerRef.current);
+    timerRef.current = setInterval(() => {
+      setStreamingElapsed((Date.now() - startTime) / 1000);
+    }, 100);
 
     const assistantMsgIndex = messages.length + 1;
+    // 思考卡片在流式生成中默认展开
+    setExpandedReasoningMap((prev) => ({ ...prev, [assistantMsgIndex]: true }));
+
     let fullReasoning = "";
     let fullContent = "";
     let webSrcs: WebSourceLite[] = [];
+    let retrievedMems: RetrievedMemory[] = [];
+    let retrievedThemesList: string[] = [];
 
     try {
       const res = await fetch("/api/chat", {
@@ -465,13 +520,31 @@ export default function ChatPage() {
 
           try {
             const data = JSON.parse(jsonStr);
-            if (data.type === "reasoning") {
+            if (data.type === "status") {
+              setStreamingStatus(data.text);
+            } else if (data.type === "context") {
+              retrievedThemesList = Array.isArray(data.themes) ? data.themes : [];
+              retrievedMems = Array.isArray(data.memories) ? data.memories : [];
+            } else if (data.type === "reasoning") {
+              if (reasoningStartTime === null) {
+                reasoningStartTime = Date.now();
+              }
               fullReasoning += data.text;
+              setStreamingStatus("正在深度思考与对照...");
             } else if (data.type === "content") {
+              if (reasoningStartTime !== null && reasoningEndTime === null) {
+                reasoningEndTime = Date.now();
+              }
               fullContent += data.text;
+              setStreamingStatus("");
             } else if (data.type === "web") {
               webSrcs = Array.isArray(data.sources) ? data.sources : [];
             }
+
+            const currentReasoningDuration =
+              reasoningStartTime !== null
+                ? ((reasoningEndTime ?? Date.now()) - reasoningStartTime) / 1000
+                : undefined;
 
             setMessages((prev) => {
               const next = [...prev];
@@ -479,7 +552,10 @@ export default function ChatPage() {
                 role: "assistant",
                 content: fullContent,
                 reasoning_content: fullReasoning || undefined,
+                reasoning_duration: currentReasoningDuration,
                 webSources: webSrcs.length > 0 ? webSrcs : undefined,
+                retrievedMemories: retrievedMems.length > 0 ? retrievedMems : undefined,
+                retrievedThemes: retrievedThemesList.length > 0 ? retrievedThemesList : undefined,
                 created_at: new Date().toISOString(),
               };
               return next;
@@ -516,6 +592,11 @@ export default function ChatPage() {
       ]);
       showToast("发送失败，请检查配置", "error");
     } finally {
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+      setStreamingStatus("");
       // 本地消息数 +2（空对话判断用）；刷新该会话产生的记忆候选
       if (activeSessionId) {
         setSessions((prev) =>
@@ -527,6 +608,17 @@ export default function ChatPage() {
       }
       setStreaming(false);
     }
+  };
+
+  /** 重新生成某一轮助手回复 */
+  const regenerate = async (assistantIdx: number) => {
+    if (streaming) return;
+    const prevUserMsg = messages[assistantIdx - 1];
+    if (!prevUserMsg || prevUserMsg.role !== "user") return;
+
+    // 移除从上一条用户消息开始的内容并重新发送
+    setMessages((prev) => prev.slice(0, assistantIdx - 1));
+    await send(prevUserMsg.content, prevUserMsg.images);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -845,30 +937,134 @@ export default function ChatPage() {
                         ) : null;
                       })()}
 
-                      {/* Reasoning Box (Thinker step) */}
-                      {!isUser && msg.reasoning_content && (
-                        <div className="w-full mb-3 rounded-xl border border-border/60 bg-surface/60 overflow-hidden text-xs">
+                      {/* Context Memories Box (调取的历史记忆与张力) */}
+                      {!isUser && msg.retrievedMemories && msg.retrievedMemories.length > 0 && (
+                        <div className="w-full mb-2 rounded-xl border border-border/60 bg-surface/50 overflow-hidden text-xs transition-all">
                           <button
-                            onClick={() => setReasoningOpen((v) => !v)}
-                            className="w-full px-3.5 py-2 flex items-center justify-between text-muted hover:text-foreground bg-surface-2/40 transition-colors cursor-pointer"
+                            onClick={() => toggleContext(idx)}
+                            className="w-full px-3 py-2 flex items-center justify-between text-muted hover:text-foreground bg-surface-2/30 transition-colors cursor-pointer"
                           >
                             <span className="flex items-center gap-1.5 font-medium tracking-wide">
-                              <Brain className="h-3.5 w-3.5 text-accent" />
-                              <span>对照与深度思考过程</span>
-                              {isStreamingCurrent && (
-                                <span className="inline-block h-1.5 w-1.5 rounded-full bg-accent animate-ping" />
+                              <Layers className="h-3.5 w-3.5 text-accent" />
+                              <span>调取了 {msg.retrievedMemories.length} 条历史记忆与张力</span>
+                              {msg.retrievedThemes && msg.retrievedThemes.length > 0 && (
+                                <span className="text-[10px] text-muted font-normal hidden sm:inline ml-1">
+                                  · 关联生活域: {msg.retrievedThemes.join(" / ")}
+                                </span>
                               )}
                             </span>
                             <div className="flex items-center gap-1 text-[11px] text-muted">
-                              <span>{reasoningOpen ? "收起思考" : "展开思考"}</span>
-                              {reasoningOpen ? (
+                              <span>{expandedContextMap[idx] ? "收起" : "展开"}</span>
+                              {expandedContextMap[idx] ? (
                                 <ChevronDown className="h-3.5 w-3.5" />
                               ) : (
                                 <ChevronRight className="h-3.5 w-3.5" />
                               )}
                             </div>
                           </button>
-                          {reasoningOpen && (
+                          {expandedContextMap[idx] && (
+                            <div className="p-2.5 border-t border-border/40 space-y-1.5 bg-background/25">
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                                {msg.retrievedMemories.map((m) => {
+                                  const isTension = m.relation === "tension";
+                                  const isOpenLoop = m.relation === "openLoop";
+                                  const isConstitution = m.relation === "constitution";
+                                  return (
+                                    <div
+                                      key={m.id}
+                                      className={cn(
+                                        "p-2 rounded-lg border text-[11px] transition-colors",
+                                        isTension
+                                          ? "border-danger/30 bg-danger-soft/20 text-foreground"
+                                          : isOpenLoop
+                                          ? "border-accent/30 bg-accent-soft/20 text-foreground"
+                                          : "border-border/60 bg-surface-2/40 text-foreground"
+                                      )}
+                                    >
+                                      <div className="flex items-center justify-between gap-1 mb-1">
+                                        <Badge
+                                          variant={isTension ? "danger" : isConstitution ? "accent" : "outline"}
+                                          className="text-[9px] py-0 px-1 font-medium"
+                                        >
+                                          {isTension
+                                            ? "⚠️ 历史张力"
+                                            : isOpenLoop
+                                            ? "🔄 未解纠结"
+                                            : isConstitution
+                                            ? "📜 核心宪章"
+                                            : "🏷️ 相关记忆"}
+                                        </Badge>
+                                        {m.theme && (
+                                          <span className="text-[10px] text-muted">
+                                            {m.theme}
+                                          </span>
+                                        )}
+                                      </div>
+                                      <div className="font-medium text-foreground line-clamp-1">{m.title}</div>
+                                      <p className="text-muted text-[10px] line-clamp-2 mt-0.5 leading-relaxed">
+                                        {m.content}
+                                      </p>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Reasoning Box (Thinker step with timing & floating animation) */}
+                      {!isUser && msg.reasoning_content && (
+                        <div
+                          className={cn(
+                            "w-full mb-3 rounded-xl border overflow-hidden text-xs transition-all",
+                            isStreamingCurrent && !msg.content
+                              ? "border-accent/40 bg-surface/80 shadow-xs animate-glow-breathe"
+                              : "border-border/60 bg-surface/60"
+                          )}
+                        >
+                          <button
+                            onClick={() => toggleReasoning(idx)}
+                            className="w-full px-3.5 py-2 flex items-center justify-between text-muted hover:text-foreground bg-surface-2/40 transition-colors cursor-pointer"
+                          >
+                            <span className="flex items-center gap-2 font-medium tracking-wide">
+                              <Brain
+                                className={cn(
+                                  "h-3.5 w-3.5 text-accent",
+                                  isStreamingCurrent && !msg.content && "animate-pulse"
+                                )}
+                              />
+                              <span>
+                                {isStreamingCurrent && !msg.content
+                                  ? `深度对照与思考中 (${streamingElapsed.toFixed(1)}s)...`
+                                  : `对照与深度思考过程${
+                                      msg.reasoning_duration
+                                        ? ` · 耗时 ${msg.reasoning_duration.toFixed(1)}s`
+                                        : ""
+                                    }`}
+                              </span>
+                              {isStreamingCurrent && !msg.content && (
+                                <span className="flex items-center gap-1 ml-0.5">
+                                  <span className="h-1.5 w-1.5 rounded-full bg-accent animate-floating-1" />
+                                  <span className="h-1.5 w-1.5 rounded-full bg-accent animate-floating-2" />
+                                  <span className="h-1.5 w-1.5 rounded-full bg-accent animate-floating-3" />
+                                </span>
+                              )}
+                            </span>
+                            <div className="flex items-center gap-1 text-[11px] text-muted">
+                              <span>
+                                {expandedReasoningMap[idx] ?? isStreamingCurrent
+                                  ? "收起思考"
+                                  : "展开思考"}
+                              </span>
+                              {expandedReasoningMap[idx] ?? isStreamingCurrent ? (
+                                <ChevronDown className="h-3.5 w-3.5" />
+                              ) : (
+                                <ChevronRight className="h-3.5 w-3.5" />
+                              )}
+                            </div>
+                          </button>
+                          {(expandedReasoningMap[idx] ?? isStreamingCurrent) && (
                             <div className="p-3.5 border-t border-border/40 font-mono text-[11px] text-muted leading-relaxed whitespace-pre-wrap max-h-60 overflow-y-auto bg-background/30">
                               {msg.reasoning_content}
                             </div>
@@ -912,9 +1108,20 @@ export default function ChatPage() {
                       >
                         {isUser ? (
                           <div className="whitespace-pre-wrap">{msg.content}</div>
+                        ) : !msg.content && isStreamingCurrent ? (
+                          <div className="flex items-center gap-2 text-xs text-muted py-0.5">
+                            <div className="flex items-center gap-1">
+                              <span className="h-1.5 w-1.5 rounded-full bg-accent animate-floating-1" />
+                              <span className="h-1.5 w-1.5 rounded-full bg-accent animate-floating-2" />
+                              <span className="h-1.5 w-1.5 rounded-full bg-accent animate-floating-3" />
+                            </div>
+                            <span className="animate-pulse-subtle font-medium">
+                              {streamingStatus || "正在深度思考与组织回应..."}
+                            </span>
+                          </div>
                         ) : (
                           <div className="prose-chat">
-                            <Markdown content={msg.content || (isStreamingCurrent ? "正在深思..." : "")} />
+                            <Markdown content={msg.content} />
                             {isStreamingCurrent && (
                               <span className="inline-block h-3.5 w-1.5 bg-accent ml-1 animate-pulse align-middle" />
                             )}
@@ -922,10 +1129,10 @@ export default function ChatPage() {
                         )}
                       </div>
 
-                      {/* Message footer & copy action */}
+                      {/* Message footer & actions */}
                       <div
                         className={cn(
-                          "flex items-center gap-2 mt-1.5 px-1 text-[10px] text-muted",
+                          "flex items-center gap-3 mt-1.5 px-1 text-[11px] text-muted",
                           isUser ? "flex-row-reverse" : "flex-row"
                         )}
                       >
@@ -937,18 +1144,44 @@ export default function ChatPage() {
                             })}
                           </span>
                         )}
-                        {!isUser && msg.content && (
+                        {isUser && (
                           <button
-                            onClick={() => copyToClipboard(msg.content, idx)}
-                            className="opacity-0 group-hover:opacity-100 transition-opacity p-0.5 hover:text-foreground"
-                            title="复制内容"
+                            onClick={() => {
+                              setInput(msg.content);
+                              textareaRef.current?.focus();
+                            }}
+                            className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 hover:text-foreground cursor-pointer"
+                            title="编辑此消息并填回输入框"
                           >
-                            {copiedId === idx ? (
-                              <Check className="h-3 w-3 text-accent" />
-                            ) : (
-                              <Copy className="h-3 w-3" />
-                            )}
+                            <Edit3 className="h-3 w-3" />
+                            <span>编辑</span>
                           </button>
+                        )}
+                        {!isUser && msg.content && (
+                          <>
+                            <button
+                              onClick={() => copyToClipboard(msg.content, idx)}
+                              className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 hover:text-foreground cursor-pointer"
+                              title="复制内容"
+                            >
+                              {copiedId === idx ? (
+                                <Check className="h-3 w-3 text-accent" />
+                              ) : (
+                                <Copy className="h-3 w-3" />
+                              )}
+                              <span>{copiedId === idx ? "已复制" : "复制"}</span>
+                            </button>
+                            {!streaming && idx === messages.length - 1 && (
+                              <button
+                                onClick={() => regenerate(idx)}
+                                className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 hover:text-foreground cursor-pointer"
+                                title="重新思考这轮对话"
+                              >
+                                <RotateCcw className="h-3 w-3" />
+                                <span>重新思考</span>
+                              </button>
+                            )}
+                          </>
                         )}
                       </div>
                     </div>

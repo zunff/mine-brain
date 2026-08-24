@@ -20,8 +20,19 @@ import {
 } from "@/lib/memory/repo";
 import { buildSystemPrompt } from "./system-prompt";
 
+export interface RetrievedMemorySummary {
+  id: number;
+  title: string;
+  type: string;
+  theme?: string | null;
+  content: string;
+  relation: "constitution" | "related" | "tension" | "openLoop";
+}
+
 export type OrchestratorEvent =
   | { type: "meta"; sessionId: number; title: string }
+  | { type: "status"; text: string }
+  | { type: "context"; themes: string[]; memories: RetrievedMemorySummary[] }
   | { type: "web"; mode: "read" | "search"; sources: WebSource[] }
   | { type: "reasoning"; text: string }
   | { type: "content"; text: string }
@@ -59,9 +70,75 @@ export async function* runChat(
     touchSession(session.id, { title: deriveTitle(trimmed || "图片对话") });
   }
 
+  yield { type: "status", text: "正在调取历史记忆与价值观..." };
+
   const settings = getAiSettings();
   const vectorBoostById = await computeVectorBoostMap(settings, trimmed);
   const bundle = buildContextBundle(trimmed, { vectorBoostById: vectorBoostById ?? undefined });
+
+  // 记忆检索摘要：向前端透出本次调取的记忆切面（张力、开放回路、相关记忆与宪章）
+  const memorySummaries: RetrievedMemorySummary[] = [];
+  const seenIds = new Set<number>();
+  for (const m of bundle.tensions.slice(0, 2)) {
+    if (!seenIds.has(m.id)) {
+      seenIds.add(m.id);
+      memorySummaries.push({
+        id: m.id,
+        title: m.title || m.content.slice(0, 24),
+        type: m.type,
+        theme: m.theme,
+        content: m.content,
+        relation: "tension",
+      });
+    }
+  }
+  for (const m of bundle.openLoops.slice(0, 2)) {
+    if (!seenIds.has(m.id)) {
+      seenIds.add(m.id);
+      memorySummaries.push({
+        id: m.id,
+        title: m.title || m.content.slice(0, 24),
+        type: m.type,
+        theme: m.theme,
+        content: m.content,
+        relation: "openLoop",
+      });
+    }
+  }
+  for (const m of bundle.related.slice(0, 3)) {
+    if (!seenIds.has(m.id)) {
+      seenIds.add(m.id);
+      memorySummaries.push({
+        id: m.id,
+        title: m.title || m.content.slice(0, 24),
+        type: m.type,
+        theme: m.theme,
+        content: m.content,
+        relation: "related",
+      });
+    }
+  }
+  for (const m of bundle.constitution.slice(0, 2)) {
+    if (!seenIds.has(m.id)) {
+      seenIds.add(m.id);
+      memorySummaries.push({
+        id: m.id,
+        title: m.title || m.content.slice(0, 24),
+        type: m.type,
+        theme: m.theme,
+        content: m.content,
+        relation: "constitution",
+      });
+    }
+  }
+
+  if (memorySummaries.length > 0 || bundle.themes.length > 0) {
+    yield {
+      type: "context",
+      themes: bundle.themes,
+      memories: memorySummaries,
+    };
+  }
 
   // 联网支线：开了开关且配了专属 key 才走；任何失败都只记日志——
   // 外部资料是锦上添花，绝不能挡住回复本身（与 embedder 降级同款纪律）。
@@ -69,6 +146,7 @@ export async function* runChat(
   if (opts.webSearch && trimmed && searcherReady(settings)) {
     const searcher = resolveSearcher(settings);
     if (searcher) {
+      yield { type: "status", text: "正在联网检索外部实时资料..." };
       try {
         const material = await gatherWebMaterial(searcher, trimmed);
         if (material.sources.length > 0) {
@@ -89,6 +167,8 @@ export async function* runChat(
       }
     }
   }
+
+  yield { type: "status", text: "正在深度思考与对照..." };
 
   const history = listMessages(session.id, HISTORY_LIMIT).slice(0, -1); // 去掉刚插入的这条
   const provider = resolveProvider(settings, "thinker");

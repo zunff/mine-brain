@@ -249,7 +249,7 @@ body {
 }
 
 /* ==========================================================================
-   细滚动条与实用动效
+   细滚动条与实用动效 (浮动波浪、呼吸微光、平滑过渡)
    ========================================================================== */
 *::-webkit-scrollbar {
   width: 5px;
@@ -273,3 +273,65 @@ body {
 .animate-pulse-subtle {
   animation: pulse-subtle 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
 }
+
+/* 三点交替浮动波浪 (Floating Bouncing Dots) */
+@keyframes floating-dot {
+  0%, 100% {
+    transform: translateY(0);
+    opacity: 0.35;
+  }
+  50% {
+    transform: translateY(-5px);
+    opacity: 1;
+  }
+}
+
+.animate-floating-1 {
+  animation: floating-dot 1.2s ease-in-out 0s infinite;
+}
+
+.animate-floating-2 {
+  animation: floating-dot 1.2s ease-in-out 0.2s infinite;
+}
+
+.animate-floating-3 {
+  animation: floating-dot 1.2s ease-in-out 0.4s infinite;
+}
+
+/* 微光扫过动效 (Shimmer) */
+@keyframes shimmer-sweep {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.animate-shimmer {
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--accent-soft) 50%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer-sweep 2.5s infinite;
+}
+
+/* 思考卡片柔和呼吸微光 */
+@keyframes glow-breathe {
+  0%, 100% {
+    border-color: rgba(255, 255, 255, 0.08);
+    box-shadow: 0 0 0 0 transparent;
+  }
+  50% {
+    border-color: var(--accent);
+    box-shadow: 0 0 12px -2px var(--accent-soft);
+  }
+}
+
+.animate-glow-breathe {
+  animation: glow-breathe 2.4s ease-in-out infinite;
+}
+
