@@ -41,8 +41,8 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# mine-brain runtime data
-data/
+# mine-brain runtime data（只忽略项目根 data/，别误伤 src/lib/data/）
+/data/
 
 # allow example env
 !.env.example

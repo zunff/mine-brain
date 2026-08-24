@@ -91,7 +91,9 @@ describe("导出→导入往返：数据主权闭环", () => {
   it("旧版导出缺少两张新表时仍能恢复（按空表处理）", () => {
     seedRichDataset();
     const payload = JSON.parse(JSON.stringify(buildExportPayload())) as ExportPayload;
+    // @ts-expect-error 故意删除必填字段，模拟旧版导出缺这两张新表
     delete payload.data.memory_candidates;
+    // @ts-expect-error 同上一行，模拟旧版导出缺表
     delete payload.data.memory_embeddings;
 
     const result = importPayload(payload);
