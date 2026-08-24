@@ -95,6 +95,10 @@ export interface MessageRow {
   reasoning: string | null;
   /** JSON 数组字符串：data URI 图片列表（vision 输入） */
   images: string | null;
+  /** JSON 数组字符串：联网参考的外部资料 */
+  web_sources?: string | null;
+  /** JSON 对象字符串：本轮调取的记忆与生活域 */
+  retrieved_memories?: string | null;
   created_at: string;
 }
 

@@ -133,4 +133,11 @@ CREATE TABLE IF NOT EXISTS memory_candidates (
 CREATE INDEX IF NOT EXISTS idx_candidates_session_status ON memory_candidates(session_id, status);
 `,
   },
+  {
+    id: 5,
+    sql: `
+ALTER TABLE messages ADD COLUMN web_sources TEXT;
+ALTER TABLE messages ADD COLUMN retrieved_memories TEXT;
+`,
+  },
 ];

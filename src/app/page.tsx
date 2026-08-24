@@ -154,6 +154,19 @@ export default function ChatPage() {
   // 思考耗时实时秒数（计时器）
   const [streamingElapsed, setStreamingElapsed] = useState<number>(0);
 
+  // 打字机缓冲引擎 Refs：负责在流式与断点重连时平滑输出字符
+  const activeAssistantIndexRef = useRef<number | null>(null);
+  const targetContentRef = useRef<string>("");
+  const displayedContentRef = useRef<string>("");
+  const targetReasoningRef = useRef<string>("");
+  const targetWebSourcesRef = useRef<WebSourceLite[] | undefined>(undefined);
+  const targetRetrievedMemoriesRef = useRef<RetrievedMemory[] | undefined>(undefined);
+  const targetRetrievedThemesRef = useRef<string[] | undefined>(undefined);
+  const isStreamDoneReceivedRef = useRef<boolean>(false);
+  const activeAbortControllerRef = useRef<AbortController | null>(null);
+  const reasoningStartTimeRef = useRef<number | null>(null);
+  const reasoningEndTimeRef = useRef<number | null>(null);
+
   // 联网开关：配置了搜索 key 才出现；记住上次的选择（localStorage 只存偏好）
   const [webOn, setWebOn] = useState(false);
   const [webAvailable, setWebAvailable] = useState(false);
@@ -240,16 +253,6 @@ export default function ChatPage() {
     };
   }, [router]);
 
-  const loadMessages = useCallback(async (sessionId: string) => {
-    try {
-      const res = await fetch(`/api/sessions/${sessionId}`);
-      const data = (await res.json()) as { messages: Message[] };
-      setMessages(data.messages ?? []);
-    } catch {
-      setMessages([]);
-    }
-  }, []);
-
   const loadCandidates = useCallback(async (sessionId: string | null) => {
     if (!sessionId) {
       setCandidates([]);
@@ -264,6 +267,202 @@ export default function ChatPage() {
     }
   }, []);
 
+  // 打字机缓冲引擎：每 25ms 运行一次，将 targetContentRef 平滑输出到 displayedContentRef
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const assistantIdx = activeAssistantIndexRef.current;
+      if (assistantIdx === null) return;
+
+      const target = targetContentRef.current;
+      const displayed = displayedContentRef.current;
+
+      // 实时计算思考耗时
+      const reasoningStart = reasoningStartTimeRef.current;
+      const currentReasoningDuration =
+        reasoningStart !== null
+          ? ((reasoningEndTimeRef.current ?? Date.now()) - reasoningStart) / 1000
+          : undefined;
+
+      if (displayed.length < target.length) {
+        const lag = target.length - displayed.length;
+        // 动态自适应追赶步长：落后 > 80 字步进 4 字，落后 > 25 字步进 2 字，其余步进 1 字
+        const step = lag > 80 ? 4 : lag > 25 ? 2 : 1;
+        const next = target.slice(0, displayed.length + step);
+        displayedContentRef.current = next;
+
+        setMessages((prev) => {
+          if (!prev[assistantIdx]) return prev;
+          const updated = [...prev];
+          updated[assistantIdx] = {
+            ...updated[assistantIdx],
+            content: next,
+            reasoning_content: targetReasoningRef.current || updated[assistantIdx].reasoning_content,
+            reasoning_duration: currentReasoningDuration ?? updated[assistantIdx].reasoning_duration,
+            webSources: targetWebSourcesRef.current ?? updated[assistantIdx].webSources,
+            retrievedMemories: targetRetrievedMemoriesRef.current ?? updated[assistantIdx].retrievedMemories,
+            retrievedThemes: targetRetrievedThemesRef.current ?? updated[assistantIdx].retrievedThemes,
+          };
+          return updated;
+        });
+      } else {
+        // 当文字已经追上目标且流式已完成
+        if (isStreamDoneReceivedRef.current) {
+          setStreaming(false);
+          setStreamingStatus("");
+          activeAssistantIndexRef.current = null;
+          isStreamDoneReceivedRef.current = false;
+        }
+      }
+    }, 25);
+
+    return () => clearInterval(interval);
+  }, []);
+
+  const consumeSseReader = useCallback(
+    async (
+      reader: ReadableStreamDefaultReader<Uint8Array>,
+      activeSessionId: string,
+      assistantMsgIndex: number
+    ) => {
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      try {
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() ?? "";
+
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed.startsWith("data:")) continue;
+            const jsonStr = trimmed.slice(5).trim();
+            if (!jsonStr || jsonStr === "[DONE]") continue;
+
+            try {
+              const data = JSON.parse(jsonStr);
+              if (data.type === "status") {
+                setStreamingStatus(data.text);
+              } else if (data.type === "context") {
+                targetRetrievedThemesRef.current = Array.isArray(data.themes) ? data.themes : [];
+                targetRetrievedMemoriesRef.current = Array.isArray(data.memories) ? data.memories : [];
+              } else if (data.type === "reasoning") {
+                if (reasoningStartTimeRef.current === null) {
+                  reasoningStartTimeRef.current = Date.now();
+                }
+                targetReasoningRef.current += data.text;
+                setStreamingStatus("正在深度思考与对照...");
+                setExpandedReasoningMap((prev) => ({ ...prev, [assistantMsgIndex]: true }));
+              } else if (data.type === "content") {
+                if (reasoningStartTimeRef.current !== null && reasoningEndTimeRef.current === null) {
+                  reasoningEndTimeRef.current = Date.now();
+                }
+                targetContentRef.current += data.text;
+                setStreamingStatus("");
+              } else if (data.type === "web") {
+                targetWebSourcesRef.current = Array.isArray(data.sources) ? data.sources : [];
+              } else if (data.type === "meta") {
+                if (data.title && data.title !== "新对话") {
+                  setSessions((prev) =>
+                    prev.map((s) => (s.id === activeSessionId ? { ...s, title: data.title } : s))
+                  );
+                }
+              } else if (data.type === "done") {
+                isStreamDoneReceivedRef.current = true;
+              }
+            } catch {
+              // ignore JSON parse errors on malformed chunks
+            }
+          }
+        }
+      } finally {
+        isStreamDoneReceivedRef.current = true;
+        if (timerRef.current) {
+          clearInterval(timerRef.current);
+          timerRef.current = null;
+        }
+        if (activeSessionId) {
+          loadCandidates(activeSessionId);
+        }
+      }
+    },
+    [loadCandidates]
+  );
+
+  /** 断点重连：重新连入正在后台生成的任务并启动打字机追赶 */
+  const reconnectStream = useCallback(
+    async (sessionId: string, initialMessages?: Message[]) => {
+      if (activeAbortControllerRef.current) {
+        activeAbortControllerRef.current.abort();
+      }
+      const abortController = new AbortController();
+      activeAbortControllerRef.current = abortController;
+
+      try {
+        const res = await fetch(`/api/chat?sessionId=${sessionId}`, {
+          signal: abortController.signal,
+        });
+        if (!res.ok || !res.body) return;
+
+        const contentType = res.headers.get("content-type") || "";
+        if (!contentType.includes("text/event-stream")) {
+          return;
+        }
+
+        const msgs = initialMessages ?? messages;
+        let assistantIdx = msgs.length - 1;
+        if (assistantIdx < 0 || msgs[assistantIdx].role !== "assistant") {
+          const newDraft: Message = {
+            role: "assistant",
+            content: "",
+            created_at: new Date().toISOString(),
+          };
+          setMessages((prev) => [...prev, newDraft]);
+          assistantIdx = msgs.length;
+        }
+
+        const existingContent = msgs[assistantIdx]?.content || "";
+        displayedContentRef.current = existingContent;
+        targetContentRef.current = existingContent;
+        targetReasoningRef.current = msgs[assistantIdx]?.reasoning_content || "";
+        activeAssistantIndexRef.current = assistantIdx;
+        isStreamDoneReceivedRef.current = false;
+        setStreaming(true);
+        setStreamingStatus("正在恢复思考内容...");
+
+        const reader = res.body.getReader();
+        await consumeSseReader(reader, sessionId, assistantIdx);
+      } catch (err: unknown) {
+        if (err instanceof Error && err.name === "AbortError") {
+          return;
+        }
+      }
+    },
+    [consumeSseReader, messages]
+  );
+
+  const loadMessages = useCallback(
+    async (sessionId: string) => {
+      try {
+        const res = await fetch(`/api/sessions/${sessionId}`);
+        const data = (await res.json()) as { messages: Message[]; isStreaming?: boolean };
+        const msgList = data.messages ?? [];
+        setMessages(msgList);
+
+        // 如果后端当前还在后台生成中，立即无缝断点重连！
+        if (data.isStreaming) {
+          reconnectStream(sessionId, msgList);
+        }
+      } catch {
+        setMessages([]);
+      }
+    },
+    [reconnectStream]
+  );
+
   // Initialize
   useEffect(() => {
     let active = true;
@@ -277,9 +476,12 @@ export default function ChatPage() {
         if (list.length > 0) {
           setCurrentSessionId(list[0].id);
           const msgRes = await fetch(`/api/sessions/${list[0].id}`);
-          const msgData = (await msgRes.json()) as { messages: Message[] };
+          const msgData = (await msgRes.json()) as { messages: Message[]; isStreaming?: boolean };
           if (active) {
             setMessages(msgData.messages ?? []);
+            if (msgData.isStreaming) {
+              reconnectStream(list[0].id, msgData.messages ?? []);
+            }
           }
         }
       } catch {
@@ -289,7 +491,7 @@ export default function ChatPage() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [reconnectStream]);
 
   // Scroll to bottom on message updates
   useEffect(() => {
@@ -305,6 +507,18 @@ export default function ChatPage() {
   }, [input]);
 
   const selectSession = async (id: string) => {
+    // 切换会话时，主动中断当前前端与旧会话的 HTTP 连接（后端任务仍在后台继续不受影响）
+    if (activeAbortControllerRef.current) {
+      activeAbortControllerRef.current.abort();
+      activeAbortControllerRef.current = null;
+    }
+    setStreaming(false);
+    activeAssistantIndexRef.current = null;
+    isStreamDoneReceivedRef.current = false;
+    displayedContentRef.current = "";
+    targetContentRef.current = "";
+    targetReasoningRef.current = "";
+
     setCurrentSessionId(id);
     setMobileDrawerOpen(false);
     await loadMessages(id);
@@ -455,36 +669,53 @@ export default function ChatPage() {
       created_at: new Date().toISOString(),
     };
 
-    setMessages((prev) => [...prev, userMsg]);
+    const assistantMsgIndex = messages.length + 1;
+    const initialAssistantMsg: Message = {
+      role: "assistant",
+      content: "",
+      created_at: new Date().toISOString(),
+    };
+
+    setMessages((prev) => [...prev, userMsg, initialAssistantMsg]);
     setInput("");
     setImages([]);
     setStreaming(true);
     setStreamingStatus("正在调取历史记忆与价值观...");
     setStreamingElapsed(0);
 
-    const startTime = Date.now();
-    let reasoningStartTime: number | null = null;
-    let reasoningEndTime: number | null = null;
+    // 重置打字机缓冲
+    displayedContentRef.current = "";
+    targetContentRef.current = "";
+    targetReasoningRef.current = "";
+    targetWebSourcesRef.current = undefined;
+    targetRetrievedMemoriesRef.current = undefined;
+    targetRetrievedThemesRef.current = undefined;
+    activeAssistantIndexRef.current = assistantMsgIndex;
+    isStreamDoneReceivedRef.current = false;
+    reasoningStartTimeRef.current = null;
+    reasoningEndTimeRef.current = null;
 
+    const startTime = Date.now();
     if (timerRef.current) clearInterval(timerRef.current);
     timerRef.current = setInterval(() => {
       setStreamingElapsed((Date.now() - startTime) / 1000);
     }, 100);
 
-    const assistantMsgIndex = messages.length + 1;
     // 思考卡片在流式生成中默认展开
     setExpandedReasoningMap((prev) => ({ ...prev, [assistantMsgIndex]: true }));
 
-    let fullReasoning = "";
-    let fullContent = "";
-    let webSrcs: WebSourceLite[] = [];
-    let retrievedMems: RetrievedMemory[] = [];
-    let retrievedThemesList: string[] = [];
+    // 中断可能存在的旧连接
+    if (activeAbortControllerRef.current) {
+      activeAbortControllerRef.current.abort();
+    }
+    const abortController = new AbortController();
+    activeAbortControllerRef.current = abortController;
 
     try {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        signal: abortController.signal,
         body: JSON.stringify({
           sessionId: activeSessionId,
           message: userMsg.content,
@@ -501,70 +732,7 @@ export default function ChatPage() {
       if (!res.body) throw new Error("无响应数据流");
 
       const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
-
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed.startsWith("data:")) continue;
-          const jsonStr = trimmed.slice(5).trim();
-          if (!jsonStr || jsonStr === "[DONE]") continue;
-
-          try {
-            const data = JSON.parse(jsonStr);
-            if (data.type === "status") {
-              setStreamingStatus(data.text);
-            } else if (data.type === "context") {
-              retrievedThemesList = Array.isArray(data.themes) ? data.themes : [];
-              retrievedMems = Array.isArray(data.memories) ? data.memories : [];
-            } else if (data.type === "reasoning") {
-              if (reasoningStartTime === null) {
-                reasoningStartTime = Date.now();
-              }
-              fullReasoning += data.text;
-              setStreamingStatus("正在深度思考与对照...");
-            } else if (data.type === "content") {
-              if (reasoningStartTime !== null && reasoningEndTime === null) {
-                reasoningEndTime = Date.now();
-              }
-              fullContent += data.text;
-              setStreamingStatus("");
-            } else if (data.type === "web") {
-              webSrcs = Array.isArray(data.sources) ? data.sources : [];
-            }
-
-            const currentReasoningDuration =
-              reasoningStartTime !== null
-                ? ((reasoningEndTime ?? Date.now()) - reasoningStartTime) / 1000
-                : undefined;
-
-            setMessages((prev) => {
-              const next = [...prev];
-              next[assistantMsgIndex] = {
-                role: "assistant",
-                content: fullContent,
-                reasoning_content: fullReasoning || undefined,
-                reasoning_duration: currentReasoningDuration,
-                webSources: webSrcs.length > 0 ? webSrcs : undefined,
-                retrievedMemories: retrievedMems.length > 0 ? retrievedMems : undefined,
-                retrievedThemes: retrievedThemesList.length > 0 ? retrievedThemesList : undefined,
-                created_at: new Date().toISOString(),
-              };
-              return next;
-            });
-          } catch {
-            // ignore JSON parse errors on malformed chunks
-          }
-        }
-      }
+      await consumeSseReader(reader, activeSessionId, assistantMsgIndex);
 
       // Update session title if it's the first message and still named "新对话"
       const currSession = sessions.find((s) => s.id === activeSessionId);
@@ -581,32 +749,30 @@ export default function ChatPage() {
         });
       }
     } catch (err: unknown) {
+      if (err instanceof Error && err.name === "AbortError") {
+        return;
+      }
       const errorMsg = err instanceof Error ? err.message : "连接失败";
-      setMessages((prev) => [
-        ...prev,
-        {
+      setMessages((prev) => {
+        const updated = [...prev];
+        updated[assistantMsgIndex] = {
           role: "assistant",
           content: `⚠️ 对话出错：${errorMsg}。\n\n请检查「设置」页中的 API Key 与 Base URL 是否正确。`,
           created_at: new Date().toISOString(),
-        },
-      ]);
+        };
+        return updated;
+      });
       showToast("发送失败，请检查配置", "error");
+      setStreaming(false);
+      isStreamDoneReceivedRef.current = false;
     } finally {
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-        timerRef.current = null;
-      }
-      setStreamingStatus("");
-      // 本地消息数 +2（空对话判断用）；刷新该会话产生的记忆候选
       if (activeSessionId) {
         setSessions((prev) =>
           prev.map((s) =>
             s.id === activeSessionId ? { ...s, message_count: (s.message_count ?? 0) + 2 } : s
           )
         );
-        loadCandidates(activeSessionId);
       }
-      setStreaming(false);
     }
   };
 
@@ -1150,7 +1316,7 @@ export default function ChatPage() {
                               setInput(msg.content);
                               textareaRef.current?.focus();
                             }}
-                            className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 hover:text-foreground cursor-pointer"
+                            className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity flex items-center gap-1 hover:text-foreground cursor-pointer text-muted hover:text-accent"
                             title="编辑此消息并填回输入框"
                           >
                             <Edit3 className="h-3 w-3" />
@@ -1161,7 +1327,7 @@ export default function ChatPage() {
                           <>
                             <button
                               onClick={() => copyToClipboard(msg.content, idx)}
-                              className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 hover:text-foreground cursor-pointer"
+                              className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity flex items-center gap-1 hover:text-foreground cursor-pointer text-muted hover:text-accent"
                               title="复制内容"
                             >
                               {copiedId === idx ? (
@@ -1174,7 +1340,7 @@ export default function ChatPage() {
                             {!streaming && idx === messages.length - 1 && (
                               <button
                                 onClick={() => regenerate(idx)}
-                                className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 hover:text-foreground cursor-pointer"
+                                className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity flex items-center gap-1 hover:text-foreground cursor-pointer text-muted hover:text-accent"
                                 title="重新思考这轮对话"
                               >
                                 <RotateCcw className="h-3 w-3" />

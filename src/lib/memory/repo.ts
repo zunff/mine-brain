@@ -95,11 +95,13 @@ export function addMessage(
   content: string,
   reasoning?: string,
   images?: string[],
+  webSources?: string,
+  retrievedMemories?: string,
 ): MessageRow {
   const now = nowIso();
   const res = getDb()
     .prepare(
-      "INSERT INTO messages (session_id, role, content, reasoning, images, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+      "INSERT INTO messages (session_id, role, content, reasoning, images, web_sources, retrieved_memories, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .run(
       sessionId,
@@ -107,6 +109,8 @@ export function addMessage(
       content,
       reasoning ?? null,
       images && images.length > 0 ? JSON.stringify(images) : null,
+      webSources ?? null,
+      retrievedMemories ?? null,
       now,
     );
   touchSession(sessionId);
@@ -117,19 +121,33 @@ export function addMessage(
     content,
     reasoning: reasoning ?? null,
     images: images && images.length > 0 ? JSON.stringify(images) : null,
+    web_sources: webSources ?? null,
+    retrieved_memories: retrievedMemories ?? null,
     created_at: now,
   };
 }
 
-/** 更新已存在消息的内容（流式节流落库用）。 */
+/** 更新已存在消息的内容及可选元数据（流式节流落库用）。 */
 export function updateMessageContent(
   id: number,
   content: string,
   reasoning: string | null,
+  meta?: {
+    webSources?: string | null;
+    retrievedMemories?: string | null;
+  },
 ): void {
-  getDb()
-    .prepare("UPDATE messages SET content = ?, reasoning = ? WHERE id = ?")
-    .run(content, reasoning, id);
+  if (meta && (meta.webSources !== undefined || meta.retrievedMemories !== undefined)) {
+    getDb()
+      .prepare(
+        "UPDATE messages SET content = ?, reasoning = ?, web_sources = COALESCE(?, web_sources), retrieved_memories = COALESCE(?, retrieved_memories) WHERE id = ?",
+      )
+      .run(content, reasoning, meta.webSources ?? null, meta.retrievedMemories ?? null, id);
+  } else {
+    getDb()
+      .prepare("UPDATE messages SET content = ?, reasoning = ? WHERE id = ?")
+      .run(content, reasoning, id);
+  }
 }
 
 export function listMessages(sessionId: number, limit = 200): MessageRow[] {

@@ -170,6 +170,22 @@ export async function* runChat(
 
   yield { type: "status", text: "正在深度思考与对照..." };
 
+  const serializedMemories =
+    memorySummaries.length > 0 || bundle.themes.length > 0
+      ? JSON.stringify({ themes: bundle.themes, memories: memorySummaries })
+      : null;
+
+  const serializedWebSources =
+    web && web.sources.length > 0
+      ? JSON.stringify(
+          web.sources.map(({ title, url, publishedDate }) => ({
+            title,
+            url,
+            publishedDate,
+          }))
+        )
+      : null;
+
   const history = listMessages(session.id, HISTORY_LIMIT).slice(0, -1); // 去掉刚插入的这条
   const provider = resolveProvider(settings, "thinker");
 
@@ -183,11 +199,22 @@ export async function* runChat(
   ];
 
   let content = "";
-  // 流式期间节流落库：中途刷新/断流不丢整条回复
-  const { id: draftId } = addMessage(session.id, "assistant", "");
+  // 流式期间节流落库：中途刷新/断流不丢整条回复，同时持久化当轮调取的记忆与外部资料
+  const { id: draftId } = addMessage(
+    session.id,
+    "assistant",
+    "",
+    undefined,
+    undefined,
+    serializedWebSources ?? undefined,
+    serializedMemories ?? undefined
+  );
   let lastFlush = Date.now();
   const flush = () => {
-    updateMessageContent(draftId, content, reasoning || null);
+    updateMessageContent(draftId, content, reasoning || null, {
+      webSources: serializedWebSources,
+      retrievedMemories: serializedMemories,
+    });
     lastFlush = Date.now();
   };
 
@@ -213,14 +240,12 @@ export async function* runChat(
     yield { type: "content", text: content };
   }
 
-  let candidatesAdded = 0;
-  try {
-    candidatesAdded = await consolidateSession(session.id);
-  } catch (err) {
-    console.error("[consolidate] failed:", err);
-  }
+  // 会话后记忆提炼异步进行，绝不阻塞回复流关闭（避免前端在正文结束后卡顿挂起 5~10 秒）
+  void consolidateSession(session.id).catch((err) => {
+    console.error("[consolidate] background failed:", err);
+  });
 
-  yield { type: "done", candidatesAdded };
+  yield { type: "done", candidatesAdded: 0 };
 }
 
 function deriveTitle(text: string): string {
