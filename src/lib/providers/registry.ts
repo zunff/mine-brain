@@ -1,5 +1,6 @@
 import { readAiEnvConfig } from "@/lib/config";
 import { OpenAICompatibleProvider } from "./openai-compatible";
+import { ExaWebProvider, type WebSearchProvider } from "./web-search";
 import { AgentRole, AIProvider, ProviderConfig, RoleOverride } from "./types";
 
 /** 设置页存储的完整 AI 配置（DB settings 表 key="ai"，JSON）。 */
@@ -56,6 +57,38 @@ export function resolveEmbedder(settings: AiSettings): AIProvider | null {
     apiKey: r.apiKey,
     model: r.model,
   });
+}
+
+/** searcher 的生效配置（角色覆盖优先，其次 env 默认）。 */
+export interface SearcherRuntime {
+  baseUrl: string;
+  apiKey: string;
+}
+
+/**
+ * 联网搜索运行时配置。key 只认专属来源（searcher 角色覆盖 / 搜索 env），
+ * 绝不回退全局对话 key——跨厂商混用 key 必失败，静默比报错更糟。
+ */
+export function searcherRuntime(settings: AiSettings): SearcherRuntime | null {
+  const env = readAiEnvConfig();
+  const o = settings.roles?.searcher;
+  const apiKey = o?.apiKey?.trim() || env.searchApiKey;
+  if (!apiKey) return null;
+  return {
+    baseUrl: o?.baseUrl?.trim() || env.searchBaseUrl,
+    apiKey,
+  };
+}
+
+/** 联网可用前提：配了专属 key。未配置时聊天页连「联网」开关都不出现。 */
+export function searcherReady(settings: AiSettings): boolean {
+  return searcherRuntime(settings) !== null;
+}
+
+export function resolveSearcher(settings: AiSettings): WebSearchProvider | null {
+  const r = searcherRuntime(settings);
+  if (!r) return null;
+  return new ExaWebProvider({ baseUrl: r.baseUrl, apiKey: r.apiKey });
 }
 
 /** env + 空 DB 覆盖时的兜底设置。 */

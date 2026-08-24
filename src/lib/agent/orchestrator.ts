@@ -1,4 +1,9 @@
-import { resolveProvider } from "@/lib/providers/registry";
+import { resolveProvider, resolveSearcher, searcherReady } from "@/lib/providers/registry";
+import {
+  gatherWebMaterial,
+  type WebMaterial,
+  type WebSource,
+} from "@/lib/providers/web-search";
 import type { ContentPart } from "@/lib/providers/types";
 import { consolidateSession } from "@/lib/memory/consolidate";
 import { buildContextBundle, computeVectorBoostMap } from "@/lib/memory/retrieve";
@@ -17,20 +22,27 @@ import { buildSystemPrompt } from "./system-prompt";
 
 export type OrchestratorEvent =
   | { type: "meta"; sessionId: number; title: string }
+  | { type: "web"; mode: "read" | "search"; sources: WebSource[] }
   | { type: "reasoning"; text: string }
   | { type: "content"; text: string }
   | { type: "done"; candidatesAdded: number };
 
 const HISTORY_LIMIT = 12;
 
+export interface RunChatOptions {
+  /** 用户开启「联网」：回复前拉取外部资料注入上下文。未配 key 或失败时静默跳过。 */
+  webSearch?: boolean;
+}
+
 /**
- * 对话主循环：检索 → 组 prompt → 流式回复 → 持久化 → 会话后整理。
+ * 对话主循环：检索（+可选联网）→ 组 prompt → 流式回复 → 持久化 → 会话后整理。
  * 整理失败只记日志，绝不影响回复已送达的事实。
  */
 export async function* runChat(
   sessionId: number | null,
   userText: string,
   images?: string[],
+  opts: RunChatOptions = {},
 ): AsyncGenerator<OrchestratorEvent> {
   const trimmed = userText.trim();
   if (!trimmed && !(images && images.length > 0)) throw new Error("empty message");
@@ -50,13 +62,41 @@ export async function* runChat(
   const settings = getAiSettings();
   const vectorBoostById = await computeVectorBoostMap(settings, trimmed);
   const bundle = buildContextBundle(trimmed, { vectorBoostById: vectorBoostById ?? undefined });
+
+  // 联网支线：开了开关且配了专属 key 才走；任何失败都只记日志——
+  // 外部资料是锦上添花，绝不能挡住回复本身（与 embedder 降级同款纪律）。
+  let web: WebMaterial | null = null;
+  if (opts.webSearch && trimmed && searcherReady(settings)) {
+    const searcher = resolveSearcher(settings);
+    if (searcher) {
+      try {
+        const material = await gatherWebMaterial(searcher, trimmed);
+        if (material.sources.length > 0) {
+          web = { mode: material.mode, sources: material.sources };
+          yield {
+            type: "web",
+            mode: web.mode,
+            // 只给 UI 需要的字段：正文留给 prompt，不进事件流
+            sources: web.sources.map(({ title, url, publishedDate }) => ({
+              title,
+              url,
+              publishedDate,
+            })),
+          };
+        }
+      } catch (err) {
+        console.error("[web] skipped:", err);
+      }
+    }
+  }
+
   const history = listMessages(session.id, HISTORY_LIMIT).slice(0, -1); // 去掉刚插入的这条
   const provider = resolveProvider(settings, "thinker");
 
   const messages = [
     {
       role: "system" as const,
-      content: buildSystemPrompt(bundle, getAssistantPreferences()),
+      content: buildSystemPrompt(bundle, getAssistantPreferences(), web),
     },
     ...history.map((m) => ({ role: m.role, content: rebuildContent(m) })),
     { role: "user" as const, content: buildUserContent(trimmed, images) },

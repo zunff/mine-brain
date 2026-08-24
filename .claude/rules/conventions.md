@@ -19,6 +19,7 @@
 - 业务代码里**禁止出现**模型名、base_url、api key 字面量；只能通过角色名（thinker/extractor/embedder…）调 `resolveProvider(role)`。
 - Provider 接口：`chat(messages, opts)` 必须支持流式；`embed?()` 是独立能力（对话用的 opencode zen 无 embeddings 端点，需经 embedder 角色指向百炼/Ollama 等）。调用方一律先查 `embedderReady()`，不 ready 或失败即降级到词法检索，绝不允许因此报错。
 - 向量铁律：向量只对当前 `(model, dims)` 有效（跨模型=噪音）；换模型/维度必须重嵌。存储用 `memory_embeddings` 表的 model/dims 元数据对账，查询时只匹配当前模型。
+- 联网搜索是独立能力（非 OpenAI 协议，无 model 概念）：经 `searcherReady()` / `resolveSearcher()` 解析。key 只认 searcher 角色覆盖或 `MINE_BRAIN_SEARCH_API_KEY` env，**绝不回退全局对话 key**（跨厂商混用必失败）；未配置时聊天页整体隐藏开关，搜索/抓正文失败只降级不报错。
 - 当前模型 x-preview-f-free 是推理模型：思考在 `message.reasoning_content`，正文在 `message.content`；max_tokens 给足（≥2000），否则 content 为空。
 - key 只存于 `.env.local`（gitignore）或运行时 DB settings 表，绝不入库 git。
 

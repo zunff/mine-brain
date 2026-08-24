@@ -9,6 +9,8 @@ interface ChatBody {
   content?: string;
   /** data URI 图片，最多 4 张（vision） */
   images?: string[];
+  /** 用户开启联网：回复前拉取外部资料（未配置搜索 key 时服务端自动忽略） */
+  webSearch?: boolean;
 }
 
 const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
@@ -40,7 +42,9 @@ export async function POST(req: Request): Promise<Response> {
         controller.enqueue(encoder.encode(`data: ${JSON.stringify(evt)}\n\n`));
       };
       try {
-        for await (const evt of runChat(numericSessionId, rawMessage, images)) {
+        for await (const evt of runChat(numericSessionId, rawMessage, images, {
+          webSearch: body.webSearch === true,
+        })) {
           send(evt);
         }
       } catch (err) {

@@ -1,10 +1,15 @@
 import { getAiSettings, setSetting } from "@/lib/memory/repo";
-import { embedderReady, embedderRuntime, type AiSettings } from "@/lib/providers/registry";
+import {
+  embedderReady,
+  embedderRuntime,
+  searcherRuntime,
+  type AiSettings,
+} from "@/lib/providers/registry";
 import type { AgentRole, RoleOverride } from "@/lib/providers/types";
 
 export const dynamic = "force-dynamic";
 
-const ROLES: AgentRole[] = ["thinker", "extractor", "embedder"];
+const ROLES: AgentRole[] = ["thinker", "extractor", "embedder", "searcher"];
 
 function maskKey(key: string): string {
   if (!key) return "";
@@ -25,6 +30,7 @@ function maskOverride(o?: RoleOverride): RoleOverride | undefined {
 export async function GET(): Promise<Response> {
   const s = getAiSettings();
   const rt = embedderRuntime(s);
+  const srt = searcherRuntime(s);
   return Response.json({
     baseUrl: s.baseUrl,
     apiKeyMasked: maskKey(s.apiKey),
@@ -43,6 +49,8 @@ export async function GET(): Promise<Response> {
           hasApiKey: Boolean(rt.apiKey),
         }
       : null,
+    // 联网搜索生效配置与可用性：ready 时聊天输入框才出现「联网」开关
+    searcher: srt ? { baseUrl: srt.baseUrl, ready: true } : null,
   });
 }
 

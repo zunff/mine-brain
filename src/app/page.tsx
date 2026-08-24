@@ -24,6 +24,7 @@ import {
   AlertCircle,
   Compass,
   HelpCircle,
+  Globe,
 } from "lucide-react";
 import { Markdown } from "@/components/markdown";
 import { Button } from "@/components/ui/button";
@@ -40,6 +41,12 @@ import {
 } from "@/components/ui/dialog";
 import { assertOk, cn } from "@/lib/utils";
 
+interface WebSourceLite {
+  title: string;
+  url: string;
+  publishedDate?: string | null;
+}
+
 interface Message {
   id?: number;
   role: "user" | "assistant" | "system";
@@ -47,6 +54,8 @@ interface Message {
   reasoning_content?: string;
   images?: string[];
   created_at?: string;
+  /** 本轮联网参考的外部资料（仅当次会话内存中，不持久化） */
+  webSources?: WebSourceLite[];
 }
 
 interface Session {
@@ -122,6 +131,10 @@ export default function ChatPage() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
 
+  // 联网开关：配置了搜索 key 才出现；记住上次的选择（localStorage 只存偏好）
+  const [webOn, setWebOn] = useState(false);
+  const [webAvailable, setWebAvailable] = useState(false);
+
   // Dialog states for session operations
   const [renameTarget, setRenameTarget] = useState<Session | null>(null);
   const [renameTitle, setRenameTitle] = useState("");
@@ -143,6 +156,42 @@ export default function ChatPage() {
   }, []);
 
   const router = useRouter();
+
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      // 本地偏好读取放进微任务：避免在 effect 体内同步 setState 触发级联渲染
+      await Promise.resolve();
+      try {
+        const saved = localStorage.getItem("mine-brain.web") === "1";
+        if (active) setWebOn(saved);
+      } catch {
+        /* 存储不可用时保持默认关 */
+      }
+      try {
+        const res = await fetch("/api/settings");
+        const d = (await res.json()) as { searcher?: { ready?: boolean } | null };
+        if (active) setWebAvailable(Boolean(d.searcher?.ready));
+      } catch {
+        /* 拉不到配置就隐藏开关（与 embedder 未配置即隐藏同一纪律） */
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const toggleWeb = () => {
+    setWebOn((v) => {
+      const next = !v;
+      try {
+        localStorage.setItem("mine-brain.web", next ? "1" : "0");
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
+  };
 
   // 首次运行引导：未建立画像且未显式跳过时，去 /onboarding 让他决定，而不是默默开聊
   useEffect(() => {
@@ -375,6 +424,7 @@ export default function ChatPage() {
     const assistantMsgIndex = messages.length + 1;
     let fullReasoning = "";
     let fullContent = "";
+    let webSrcs: WebSourceLite[] = [];
 
     try {
       const res = await fetch("/api/chat", {
@@ -384,6 +434,7 @@ export default function ChatPage() {
           sessionId: activeSessionId,
           message: userMsg.content,
           images: userMsg.images,
+          webSearch: webOn,
         }),
       });
 
@@ -418,6 +469,8 @@ export default function ChatPage() {
               fullReasoning += data.text;
             } else if (data.type === "content") {
               fullContent += data.text;
+            } else if (data.type === "web") {
+              webSrcs = Array.isArray(data.sources) ? data.sources : [];
             }
 
             setMessages((prev) => {
@@ -426,6 +479,7 @@ export default function ChatPage() {
                 role: "assistant",
                 content: fullContent,
                 reasoning_content: fullReasoning || undefined,
+                webSources: webSrcs.length > 0 ? webSrcs : undefined,
                 created_at: new Date().toISOString(),
               };
               return next;
@@ -822,6 +876,31 @@ export default function ChatPage() {
                         </div>
                       )}
 
+                      {/* Web Sources (本轮联网参考，带来源与时间) */}
+                      {!isUser && msg.webSources && msg.webSources.length > 0 && (
+                        <div className="w-full mb-2 rounded-xl border border-border/60 bg-surface-2/40 px-3 py-2">
+                          <div className="flex items-center gap-1.5 text-[10px] text-muted mb-1.5">
+                            <Globe className="h-3 w-3 text-accent shrink-0" />
+                            <span>参考了 {msg.webSources.length} 条外部资料 · 仅为世界信息，不是你的记忆</span>
+                          </div>
+                          <div className="flex flex-wrap gap-1.5">
+                            {msg.webSources.map((s, i) => (
+                              <a
+                                key={i}
+                                href={s.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                title={`${s.title} — ${s.url}`}
+                                className="max-w-[260px] truncate rounded-md bg-surface border border-border px-2 py-1 text-[11px] text-muted hover:text-accent hover:border-accent/40 transition-colors"
+                              >
+                                {s.publishedDate ? `${s.publishedDate.slice(0, 10)} · ` : ""}
+                                {s.title}
+                              </a>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
                       {/* Bubble */}
                       <div
                         className={cn(
@@ -991,6 +1070,22 @@ export default function ChatPage() {
                   >
                     <ImageIcon className="h-4 w-4" />
                   </Button>
+                  {webAvailable && (
+                    <button
+                      type="button"
+                      onClick={toggleWeb}
+                      title="开启后回复会参考实时网络资料（标注来源，不写入你的记忆）"
+                      className={cn(
+                        "h-7 rounded-md px-2 text-[11px] font-medium inline-flex items-center gap-1 transition-colors cursor-pointer border",
+                        webOn
+                          ? "bg-accent-soft border-accent/40 text-accent"
+                          : "border-transparent bg-transparent text-muted hover:text-foreground hover:bg-surface-2"
+                      )}
+                    >
+                      <Globe className="h-3.5 w-3.5" />
+                      <span className="hidden sm:inline">联网</span>
+                    </button>
+                  )}
                 </div>
 
                 <div className="flex items-center gap-2">

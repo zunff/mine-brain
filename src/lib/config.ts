@@ -11,6 +11,9 @@ export interface AiEnvConfig {
   embedModel: string;
   embedApiKey: string;
   embedDimensions: number;
+  /** 联网搜索默认端点（Exa）。无 key 即整个功能不存在，不影响其余路径。 */
+  searchBaseUrl: string;
+  searchApiKey: string;
 }
 
 export function readAiEnvConfig(): AiEnvConfig {
@@ -25,5 +28,8 @@ export function readAiEnvConfig(): AiEnvConfig {
     embedModel: process.env.MINE_BRAIN_EMBED_MODEL?.trim() || "qwen3.7-text-embedding",
     embedApiKey: process.env.MINE_BRAIN_EMBED_API_KEY?.trim() || "",
     embedDimensions: Number(process.env.MINE_BRAIN_EMBED_DIMENSIONS || "1024"),
+    searchBaseUrl:
+      process.env.MINE_BRAIN_SEARCH_BASE_URL?.trim() || "https://api.exa.ai",
+    searchApiKey: process.env.MINE_BRAIN_SEARCH_API_KEY?.trim() || "",
   };
 }

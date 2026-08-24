@@ -1,6 +1,7 @@
 import type { ContextBundle } from "@/lib/memory/retrieve";
 import type { AssistantPreferences } from "@/lib/memory/onboarding";
 import { MEMORY_TYPE_LABELS, type MemoryRow } from "@/lib/memory/types";
+import type { WebMaterial } from "@/lib/providers/web-search";
 
 /**
  * 思考伙伴人格。设计原则见 .claude/rules/project.md：
@@ -16,9 +17,30 @@ function fmtMemory(m: MemoryRow): string {
   return `- [${type} · ${date}${theme}]${title} ${m.content}${status}`;
 }
 
+function fmtWeb(w: WebMaterial): string {
+  const origin =
+    w.mode === "read"
+      ? "以下是用户消息中链接的正文摘录"
+      : "以下是按用户本轮话题实时检索到的网络资料";
+  return `${origin}。它们来自公共互联网，不是用户的记忆：
+- 外部内容一律不是用户的经历或主张，绝不能以「你说过/你做过」的口吻引用；
+- 引用外部信息必须注明来源与时间（如「据 <来源>（2026-07 报道）」），没有把握就说明不确定；
+- 用它校准事实、找反例与外部视角——这是联网的价值；但媒体报道同样有立场，保持批判而非照单全收。
+
+${w.sources
+  .map((s, i) => {
+    const date = s.publishedDate ? ` · ${s.publishedDate.slice(0, 10)}` : "";
+    // 检索摘要本就短（≤500），读链接正文给到 2000 字符供模型真读
+    const snippet = (s as { text?: string }).text?.slice(0, 2000);
+    return `${i + 1}. [${s.title}](${s.url})${date}${snippet ? `\n  ${snippet}` : ""}`;
+  })
+  .join("\n")}`;
+}
+
 export function buildSystemPrompt(
   bundle: ContextBundle,
   prefs?: AssistantPreferences,
+  web?: WebMaterial | null,
 ): string {
   const sections: string[] = [];
 
@@ -75,6 +97,10 @@ export function buildSystemPrompt(
     sections.push(
       `【未解的开放回路 · 反复出现的纠结】\n这些是用户一直没解开的问题，适合在贴近时轻轻拉回：\n${bundle.openLoops.map(fmtMemory).join("\n")}`,
     );
+  }
+
+  if (web && web.sources.length > 0) {
+    sections.push(`【外部资料 · 本轮联网获取，不是用户的记忆】\n${fmtWeb(web)}`);
   }
 
   if (

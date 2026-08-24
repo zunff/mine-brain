@@ -18,6 +18,7 @@ import {
   Check,
   Zap,
   UserRoundPen,
+  Globe,
 } from "lucide-react";
 import { useTheme, THEMES } from "@/components/theme-context";
 import { Button } from "@/components/ui/button";
@@ -44,7 +45,7 @@ interface SettingsView {
   apiKeyMasked: string;
   hasApiKey: boolean;
   model: string;
-  roles: Record<"thinker" | "extractor" | "embedder", RoleView | undefined>;
+  roles: Record<"thinker" | "extractor" | "embedder" | "searcher", RoleView | undefined>;
   embedder?: {
     model: string;
     baseUrl: string;
@@ -52,6 +53,7 @@ interface SettingsView {
     ready: boolean;
     hasApiKey: boolean;
   } | null;
+  searcher?: { baseUrl: string; ready: boolean } | null;
 }
 
 type RoleKey = "thinker" | "extractor";
@@ -88,6 +90,7 @@ export default function SettingsPage() {
     extractor: { ...EMPTY_ROLE },
   });
   const [embed, setEmbed] = useState({ ...EMPTY_EMBED });
+  const [search, setSearch] = useState({ baseUrl: "", apiKey: "" });
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [importing, setImporting] = useState(false);
@@ -120,6 +123,7 @@ export default function SettingsPage() {
       apiKey: "",
       dimensions: d.roles?.embedder?.dimensions?.toString() ?? "",
     });
+    setSearch({ baseUrl: "", apiKey: "" });
   }
 
   async function load() {
@@ -177,6 +181,11 @@ export default function SettingsPage() {
                 baseUrl: embed.baseUrl,
                 apiKey: embed.apiKey,
                 dimensions: embed.dimensions,
+              },
+              searcher: {
+                model: "",
+                baseUrl: search.baseUrl,
+                apiKey: search.apiKey,
               },
             },
           }),
@@ -414,7 +423,7 @@ export default function SettingsPage() {
             </Badge>
           </div>
           <p className="text-xs text-muted leading-relaxed">
-            兼容任意标准 OpenAI 协议端点（OpenAI、Anthropic 兼容代理、DeepSeek、Ollama 等）。
+            兼容任意 OpenAI 兼容协议端点（OpenAI、DeepSeek、Ollama、各类兼容网关等）。
           </p>
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -550,7 +559,7 @@ export default function SettingsPage() {
             )}
           </div>
           <p className="mt-1.5 text-xs text-muted leading-relaxed">
-            独立于对话 Provider——多数对话服务商无 embeddings 端点。默认支持阿里云百炼
+            独立于对话 Provider。默认支持阿里云百炼
             <code className="text-accent bg-accent-soft px-1 rounded mx-1">qwen3.7-text-embedding</code>
             （1024维）。
           </p>
@@ -619,6 +628,57 @@ export default function SettingsPage() {
               <RefreshCw className={cn("h-3.5 w-3.5", reindexing && "animate-spin")} />
               <span>{reindexing ? "正在重新嵌入..." : "全量重新向量化"}</span>
             </Button>
+          </div>
+        </section>
+
+        {/* 4.5 Web Search Section */}
+        <section className="mt-5 rounded-xl border border-border bg-surface p-4 sm:p-5">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Globe className="h-4 w-4 text-accent" />
+              <h2 className="text-sm font-semibold text-foreground">联网搜索 (Searcher)</h2>
+            </div>
+            {view?.searcher && (
+              <Badge variant="accent" className="text-[10px]">
+                联网能力已就绪
+              </Badge>
+            )}
+          </div>
+          <p className="mt-1.5 text-xs text-muted leading-relaxed">
+            独立于对话 Provider。带链接的消息读正文，其余按话题实时检索；外部资料标注来源、
+            <span className="text-foreground">仅作参考，绝不写入记忆</span>。
+          </p>
+
+          <div className="mt-4 grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+            <Field label="Base URL" hint="默认 Exa 官方端点">
+              <input
+                value={search.baseUrl}
+                onChange={(e) => setSearch((v) => ({ ...v, baseUrl: e.target.value }))}
+                placeholder={view?.searcher?.baseUrl || "https://api.exa.ai"}
+                className={inputCls}
+              />
+            </Field>
+            <Field label="API Key" hint={view?.roles?.searcher?.apiKeyMasked ? "已配置" : "exa.ai 申请"}>
+              <input
+                value={search.apiKey}
+                onChange={(e) => setSearch((v) => ({ ...v, apiKey: e.target.value }))}
+                type="password"
+                placeholder="留空表示不改"
+                className={inputCls}
+              />
+            </Field>
+          </div>
+
+          <div className="mt-3 border-t border-border/60 pt-3 text-[11px] text-muted">
+            {view?.searcher ? (
+              <span>
+                当前设定：<span className="text-accent font-medium">{view.searcher.baseUrl}</span>
+                {" · "}
+                聊天输入框已出现「联网」开关
+              </span>
+            ) : (
+              <span>未配置 Key——配置并保存后，聊天输入框才会出现「联网」开关</span>
+            )}
           </div>
         </section>
 
@@ -697,7 +757,7 @@ export default function SettingsPage() {
             </DialogTitle>
             <DialogDescription className="space-y-2 pt-1 text-xs">
               <p>
-                导入将覆盖当前全部数据（包括会话、记忆条目和设置）。
+                导入将覆盖当前全部数据（会话、记忆条目、标签与向量索引）；AI 设置与 API Key 保留本地配置，不会随备份覆盖。
               </p>
               <p className="text-muted">
                 系统在导入前会在 <code className="bg-surface-2 px-1 rounded">data/backups/</code> 自动生成当前数据库的完全备份。

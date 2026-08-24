@@ -34,7 +34,7 @@ export type StreamChunk =
   | { type: "content"; text: string }
   | { type: "done"; usage?: ChatUsage };
 
-export type AgentRole = "thinker" | "extractor" | "embedder";
+export type AgentRole = "thinker" | "extractor" | "embedder" | "searcher";
 
 /** 角色级覆盖：都可独立，留空回退全局。典型用法：thinker 走 A 家、embedder 走 B 家。 */
 export interface RoleOverride {
@@ -44,6 +44,7 @@ export interface RoleOverride {
   /** 仅 embedder 用：向量维度。换维度=换模型语义，需重嵌。 */
   dimensions?: number;
 }
+// searcher 只用 baseUrl/apiKey（搜索服务不是 OpenAI 兼容协议，没有 model 概念）。
 
 export interface ProviderConfig {
   baseUrl: string;
