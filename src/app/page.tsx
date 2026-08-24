@@ -27,6 +27,7 @@ import {
   Globe,
   RotateCcw,
   Layers,
+  ArrowDown,
 } from "lucide-react";
 import { Markdown } from "@/components/markdown";
 import { Button } from "@/components/ui/button";
@@ -253,6 +254,33 @@ export default function ChatPage() {
     };
   }, [router]);
 
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const userScrolledUpRef = useRef<boolean>(false);
+  const [showScrollBottomBtn, setShowScrollBottomBtn] = useState<boolean>(false);
+
+  // 监听用户主动滚动事件
+  const handleScroll = useCallback(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    const distanceToBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    const isNearBottom = distanceToBottom < 80;
+    userScrolledUpRef.current = !isNearBottom;
+    setShowScrollBottomBtn(!isNearBottom);
+  }, []);
+
+  const scrollToBottom = useCallback((smooth = true) => {
+    userScrolledUpRef.current = false;
+    setShowScrollBottomBtn(false);
+    const el = scrollContainerRef.current;
+    if (el) {
+      if (smooth) {
+        el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+      } else {
+        el.scrollTop = el.scrollHeight;
+      }
+    }
+  }, []);
+
   const loadCandidates = useCallback(async (sessionId: string | null) => {
     if (!sessionId) {
       setCandidates([]);
@@ -285,7 +313,6 @@ export default function ChatPage() {
 
       if (displayed.length < target.length) {
         const lag = target.length - displayed.length;
-        // 动态自适应追赶步长：落后 > 80 字步进 4 字，落后 > 25 字步进 2 字，其余步进 1 字
         const step = lag > 80 ? 4 : lag > 25 ? 2 : 1;
         const next = target.slice(0, displayed.length + step);
         displayedContentRef.current = next;
@@ -304,8 +331,12 @@ export default function ChatPage() {
           };
           return updated;
         });
+
+        // 仅在用户未主动向上滑动查看历史时，跟随滚到底部
+        if (!userScrolledUpRef.current && scrollContainerRef.current) {
+          scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight;
+        }
       } else {
-        // 当文字已经追上目标且流式已完成
         if (isStreamDoneReceivedRef.current) {
           setStreaming(false);
           setStreamingStatus("");
@@ -412,36 +443,41 @@ export default function ChatPage() {
           return;
         }
 
-        const msgs = initialMessages ?? messages;
-        let assistantIdx = msgs.length - 1;
-        if (assistantIdx < 0 || msgs[assistantIdx].role !== "assistant") {
-          const newDraft: Message = {
-            role: "assistant",
-            content: "",
-            created_at: new Date().toISOString(),
-          };
-          setMessages((prev) => [...prev, newDraft]);
-          assistantIdx = msgs.length;
-        }
+        let assistantIdx = -1;
+        setMessages((prev) => {
+          const msgs = initialMessages ?? prev;
+          assistantIdx = msgs.length - 1;
+          if (assistantIdx < 0 || msgs[assistantIdx].role !== "assistant") {
+            const newDraft: Message = {
+              role: "assistant",
+              content: "",
+              created_at: new Date().toISOString(),
+            };
+            assistantIdx = msgs.length;
+            return [...msgs, newDraft];
+          }
+          return msgs;
+        });
 
-        const existingContent = msgs[assistantIdx]?.content || "";
+        const targetIdx = assistantIdx >= 0 ? assistantIdx : 0;
+        const existingContent = initialMessages?.[targetIdx]?.content || "";
         displayedContentRef.current = existingContent;
         targetContentRef.current = existingContent;
-        targetReasoningRef.current = msgs[assistantIdx]?.reasoning_content || "";
-        activeAssistantIndexRef.current = assistantIdx;
+        targetReasoningRef.current = initialMessages?.[targetIdx]?.reasoning_content || "";
+        activeAssistantIndexRef.current = targetIdx;
         isStreamDoneReceivedRef.current = false;
         setStreaming(true);
         setStreamingStatus("正在恢复思考内容...");
 
         const reader = res.body.getReader();
-        await consumeSseReader(reader, sessionId, assistantIdx);
+        await consumeSseReader(reader, sessionId, targetIdx);
       } catch (err: unknown) {
         if (err instanceof Error && err.name === "AbortError") {
           return;
         }
       }
     },
-    [consumeSseReader, messages]
+    [consumeSseReader]
   );
 
   const loadMessages = useCallback(
@@ -463,7 +499,7 @@ export default function ChatPage() {
     [reconnectStream]
   );
 
-  // Initialize
+  // 仅在组件初次挂载时初始化会话列表（严禁包含 reconnectStream，避免循环重置会话）
   useEffect(() => {
     let active = true;
     (async () => {
@@ -491,12 +527,7 @@ export default function ChatPage() {
     return () => {
       active = false;
     };
-  }, [reconnectStream]);
-
-  // Scroll to bottom on message updates
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, streaming]);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-resize textarea
   useEffect(() => {
@@ -518,11 +549,14 @@ export default function ChatPage() {
     displayedContentRef.current = "";
     targetContentRef.current = "";
     targetReasoningRef.current = "";
+    userScrolledUpRef.current = false;
+    setShowScrollBottomBtn(false);
 
     setCurrentSessionId(id);
     setMobileDrawerOpen(false);
     await loadMessages(id);
     await loadCandidates(id);
+    setTimeout(() => scrollToBottom(false), 50);
   };
 
   const createSession = async (initialTitle?: string) => {
@@ -547,13 +581,27 @@ export default function ChatPage() {
     return null;
   };
 
-  /** 新对话：优先复用已存在的空会话，否则进入空白草稿（发送首条消息时才真正建会话）。 */
+  /** 开启新思考：清空当前界面，重置状态，进入全新草稿态（发送首条消息时自动建会话） */
   const startNewChat = () => {
-    const emptyNewest = sessions.find((s) => (s.message_count ?? 0) === 0);
+    if (activeAbortControllerRef.current) {
+      activeAbortControllerRef.current.abort();
+      activeAbortControllerRef.current = null;
+    }
+    setStreaming(false);
+    setStreamingStatus("");
+    activeAssistantIndexRef.current = null;
+    isStreamDoneReceivedRef.current = false;
+    displayedContentRef.current = "";
+    targetContentRef.current = "";
+    targetReasoningRef.current = "";
+    userScrolledUpRef.current = false;
+    setShowScrollBottomBtn(false);
+
+    setCurrentSessionId(null);
     setMessages([]);
     setCandidates([]);
-    setCurrentSessionId(emptyNewest ? emptyNewest.id : null);
     setMobileDrawerOpen(false);
+    textareaRef.current?.focus();
   };
 
   const submitRename = async () => {
@@ -682,6 +730,9 @@ export default function ChatPage() {
     setStreaming(true);
     setStreamingStatus("正在调取历史记忆与价值观...");
     setStreamingElapsed(0);
+    userScrolledUpRef.current = false;
+    setShowScrollBottomBtn(false);
+    setTimeout(() => scrollToBottom(false), 50);
 
     // 重置打字机缓冲
     displayedContentRef.current = "";
@@ -843,7 +894,7 @@ export default function ChatPage() {
   );
 
   return (
-    <div className="flex h-full w-full overflow-hidden bg-background">
+    <div className="flex h-full w-full min-h-0 overflow-hidden bg-background">
       {/* Toast notification */}
       {toast && (
         <div
@@ -1016,7 +1067,11 @@ export default function ChatPage() {
         </header>
 
         {/* Messages Stream Container */}
-        <div className="flex-1 overflow-y-auto px-3 sm:px-6 md:px-8 py-6 space-y-6">
+        <div
+          ref={scrollContainerRef}
+          onScroll={handleScroll}
+          className="flex-1 min-h-0 overflow-y-auto px-3 sm:px-6 md:px-8 py-6 space-y-6 relative"
+        >
           {messages.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center max-w-xl mx-auto text-center px-4 py-8">
               <div className="mb-4">
@@ -1411,6 +1466,19 @@ export default function ChatPage() {
                 </div>
               )}
               <div ref={messagesEndRef} />
+            </div>
+          )}
+
+          {/* 回到最新浮动按钮 */}
+          {showScrollBottomBtn && (
+            <div className="sticky bottom-2 flex justify-center z-20 pointer-events-none">
+              <button
+                onClick={() => scrollToBottom(true)}
+                className="pointer-events-auto flex items-center gap-1.5 rounded-full border border-border bg-surface/95 backdrop-blur-md px-3.5 py-1.5 text-xs text-foreground shadow-md hover:bg-surface-hover hover:border-accent/40 transition-all animate-in fade-in slide-in-from-bottom-2 cursor-pointer"
+              >
+                <ArrowDown className="h-3.5 w-3.5 text-accent animate-bounce" />
+                <span>回到最新</span>
+              </button>
             </div>
           )}
         </div>
