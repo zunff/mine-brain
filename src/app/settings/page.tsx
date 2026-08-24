@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   Settings as SettingsIcon,
   Palette,
@@ -16,6 +17,7 @@ import {
   ShieldCheck,
   Check,
   Zap,
+  UserRoundPen,
 } from "lucide-react";
 import { useTheme, THEMES } from "@/components/theme-context";
 import { Button } from "@/components/ui/button";
@@ -70,8 +72,15 @@ const ROLE_META: Array<{ key: RoleKey; label: string; hint: string }> = [
 const EMPTY_ROLE = { model: "", baseUrl: "", apiKey: "" };
 const EMPTY_EMBED = { model: "", baseUrl: "", apiKey: "", dimensions: "" };
 
+interface OnboardingView {
+  hasProfile: boolean;
+  onboarding: { status: string; completedAt?: string; skippedAt?: string; memoryCount?: number };
+}
+
 export default function SettingsPage() {
   const { theme, setTheme } = useTheme();
+  const router = useRouter();
+  const [onboarding, setOnboarding] = useState<OnboardingView | null>(null);
   const [view, setView] = useState<SettingsView | null>(null);
   const [g, setG] = useState({ baseUrl: "", apiKey: "", model: "" });
   const [roles, setRoles] = useState<Record<RoleKey, typeof EMPTY_ROLE>>({
@@ -120,6 +129,12 @@ export default function SettingsPage() {
     } catch {
       showToast("加载设置失败", false);
     }
+    try {
+      const res = await fetch("/api/onboarding");
+      setOnboarding((await res.json()) as OnboardingView);
+    } catch {
+      /* 画像状态非关键，加载失败不影响设置页 */
+    }
   }
 
   useEffect(() => {
@@ -130,6 +145,13 @@ export default function SettingsPage() {
         const d = (await res.json()) as SettingsView;
         if (!active) return;
         applySettings(d);
+      } catch {
+        // ignore
+      }
+      try {
+        const res = await fetch("/api/onboarding");
+        const ob = (await res.json()) as OnboardingView;
+        if (active) setOnboarding(ob);
       } catch {
         // ignore
       }
@@ -301,6 +323,40 @@ export default function SettingsPage() {
             </p>
           </div>
         </div>
+
+        {/* 0. Onboarding / Initial Profile */}
+        <section className="mt-6 rounded-xl border border-border bg-surface p-4 sm:p-5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-start gap-2">
+              <UserRoundPen className="h-4 w-4 text-accent mt-0.5" />
+              <div>
+                <h2 className="text-sm font-semibold text-foreground">初始画像</h2>
+                <p className="mt-0.5 text-xs text-muted leading-relaxed">
+                  {onboarding?.onboarding.status === "completed"
+                    ? `已建立基准${typeof onboarding.onboarding.memoryCount === "number" ? `（${onboarding.onboarding.memoryCount} 条记忆）` : ""}。重建不会删除历史：旧画像记忆会归档保留。`
+                    : onboarding?.onboarding.status === "skipped"
+                      ? "之前选择了跳过。可以随时补一份，让对照与矛盾检测更有依据。"
+                      : "尚未建立。填写几条价值观、人生阶段与反复纠结，思考伙伴从第一句对话起就有据可依。"}
+                </p>
+              </div>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() =>
+                router.push(
+                  `/onboarding${onboarding?.onboarding.status === "completed" ? "?force=1" : ""}`,
+                )
+              }
+              className="gap-1.5 h-8 text-xs shrink-0"
+            >
+              <UserRoundPen className="h-3.5 w-3.5 text-accent" />
+              <span>
+                {onboarding?.onboarding.status === "completed" ? "重新建立初始画像" : "建立初始画像"}
+              </span>
+            </Button>
+          </div>
+        </section>
 
         {/* 1. Theme Selection Section */}
         <section className="mt-6 rounded-xl border border-border bg-surface p-4 sm:p-5">

@@ -43,7 +43,7 @@ ${existingDigest || "（空）"}
 - theme 取值：career/relationship/family/health/money/growth/meaning/self，不确定就填 self
 - importance 0~1：日常吐槽 0.3 左右，重要决定与核心价值观 0.8+
 - tags：2~5 个检索用关键词
-- 如果新记忆明确推翻了清单里某条旧记忆，填 supersedes 为该条 id；价值观排序变化也算推翻（如「现在稳定比成长重要」推翻旧的价值排序），填旧 value 记忆的 id
+- 只有当新记忆明确取代清单里某一条具体旧记忆时才填 supersedes 为该条 id（如新主张直接替换旧主张；某条价值观被明确放弃、换成另一条）。多条价值观并存不构成取代——不要因为「排序变化」就推翻整组价值观
 - 与清单里某条矛盾但不构成推翻，把该 id 放进 contradicts 数组
 - 情绪强烈的可加 sentiment（-1~1）
 - 宁缺毋滥：没有值得记的就返回空数组

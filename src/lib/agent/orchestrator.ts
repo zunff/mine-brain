@@ -2,6 +2,7 @@ import { resolveProvider } from "@/lib/providers/registry";
 import type { ContentPart } from "@/lib/providers/types";
 import { consolidateSession } from "@/lib/memory/consolidate";
 import { buildContextBundle, computeVectorBoostMap } from "@/lib/memory/retrieve";
+import { getAssistantPreferences } from "@/lib/memory/onboarding";
 import {
   addEntry,
   addMessage,
@@ -53,7 +54,10 @@ export async function* runChat(
   const provider = resolveProvider(settings, "thinker");
 
   const messages = [
-    { role: "system" as const, content: buildSystemPrompt(bundle) },
+    {
+      role: "system" as const,
+      content: buildSystemPrompt(bundle, getAssistantPreferences()),
+    },
     ...history.map((m) => ({ role: m.role, content: rebuildContent(m) })),
     { role: "user" as const, content: buildUserContent(trimmed, images) },
   ];

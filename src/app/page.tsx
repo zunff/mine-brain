@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import {
   MessageSquare,
   Plus,
@@ -140,6 +141,31 @@ export default function ChatPage() {
     setToast({ text, type });
     setTimeout(() => setToast(null), 3000);
   }, []);
+
+  const router = useRouter();
+
+  // 首次运行引导：未建立画像且未显式跳过时，去 /onboarding 让他决定，而不是默默开聊
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      try {
+        const res = await fetch("/api/onboarding");
+        const d = (await res.json()) as {
+          hasProfile?: boolean;
+          onboarding?: { status?: string };
+        };
+        if (!active) return;
+        if (!d.hasProfile && d.onboarding?.status === "not_started") {
+          router.push("/onboarding");
+        }
+      } catch {
+        /* 网络/接口异常时保持可用 */
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [router]);
 
   const loadMessages = useCallback(async (sessionId: string) => {
     try {

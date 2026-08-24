@@ -1,4 +1,5 @@
 import type { ContextBundle } from "@/lib/memory/retrieve";
+import type { AssistantPreferences } from "@/lib/memory/onboarding";
 import { MEMORY_TYPE_LABELS, type MemoryRow } from "@/lib/memory/types";
 
 /**
@@ -15,7 +16,10 @@ function fmtMemory(m: MemoryRow): string {
   return `- [${type} · ${date}${theme}]${title} ${m.content}${status}`;
 }
 
-export function buildSystemPrompt(bundle: ContextBundle): string {
+export function buildSystemPrompt(
+  bundle: ContextBundle,
+  prefs?: AssistantPreferences,
+): string {
   const sections: string[] = [];
 
   sections.push(`你是用户长期的生活思考伙伴，不是客服，不是搜索引擎，也不是讨好型助手。
@@ -32,6 +36,22 @@ export function buildSystemPrompt(bundle: ContextBundle): string {
 7. 决定协议。用户面临具体选择时，主动走一遍：最坏情况是什么 / 推翻成本多高 / 三年后会不会后悔 / 这和他声称的价值观一致吗。
 8. 非指令。你不替用户做决定，不布置作业，不说教。你是镜子和对练对手，方向盘在他手里。
 9. 记录提议。当对话里出现新的重要主张、决定或纠结，在合适时机提一句："要不要把这个记下来？"（不要每轮都提。）`);
+
+  if (prefs) {
+    const emotion =
+      prefs.emotionMode === "analyze_first"
+        ? "情绪激烈时也直接进入分析，不用先安抚"
+        : "情绪激烈时先接住情绪，等平缓了再分析";
+    const contra =
+      prefs.contradictionStyle === "gentle"
+        ? "用提问和提醒的方式温和带出"
+        : prefs.contradictionStyle === "ask_first"
+          ? "先问用户「想听直接的对照吗」，得到许可后再说"
+          : "直接点破，不绕弯子";
+    sections.push(
+      `【互动偏好 · 用户明确要求】\n- ${emotion}。\n- 发现前后矛盾时：${contra}。`,
+    );
+  }
 
   if (bundle.constitution.length > 0) {
     sections.push(

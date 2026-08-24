@@ -505,15 +505,9 @@ export function approveCandidate(id: number): number {
   }
   setTags(memoryId, tags);
 
-  let supersededAny = false;
-  if (c.type === "value") {
-    for (const old of listMemories({ type: "value", limit: 50 })) {
-      if (old.id === memoryId) continue;
-      supersedeMemory(old.id, memoryId);
-      supersededAny = true;
-    }
-  }
-  if (!supersededAny && c.supersedes && getMemory(c.supersedes)) {
+  // 价值观按条独立存储（onboarding v2 起）：确认一条新 value 不再自动封口其余 value——
+  // 多条价值观并存不是取代关系；只有 extractor/用户显式指定 supersedes 某条时才封口。
+  if (c.supersedes && getMemory(c.supersedes)) {
     if (canSupersede(c.type)) {
       supersedeMemory(c.supersedes, memoryId);
     } else {

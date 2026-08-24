@@ -76,7 +76,7 @@ export function buildContextBundle(message: string, opts: RetrievalOpts = {}): C
   const constitution = all
     .filter((m) => (m.type === "profile" || m.type === "value") && m.status === "active")
     .sort((a, b) => b.importance - a.importance)
-    .slice(0, 10);
+    .slice(0, 14);
 
   const scored = all
     .filter((m) => m.status === "active" && !constitution.includes(m))

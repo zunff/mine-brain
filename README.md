@@ -63,6 +63,15 @@ Next.js App Router (React + TS + Tailwind)
 
 所有数据（含 API Key）只存本机 `data/` 目录。对话只在调用 AI 服务商时出网，且仅携带当次相关记忆切片。导出功能随时带走全部历史。
 
+## 安全提示（公网部署必读）
+
+本项目是**单用户个人应用，没有内建登录鉴权**——任何能访问到端口的人都能读写你的全部记忆、配置与密钥。
+
+- 仅本机或可信家庭内网使用：直接跑即可。
+- 需要公网访问时，务必在反向代理层加认证后再暴露（如 Caddy basic_auth / Nginx auth_request / Tailscale、WireGuard 私有网络），并启用 HTTPS。
+- Docker compose 默认绑定 `8088` 端口；若服务器有公网 IP，请在防火墙/安全组层面限制来源，不要裸奔到公网。
+- 导出文件包含全部记忆内容（API Key 已脱敏），请像对待密码一样保管。
+
 ---
 
 MIT License

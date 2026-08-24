@@ -150,7 +150,7 @@ describe("候选暂存与确认（staging）：确认前不碰正式记忆，确
     expect(getCandidate(cid)?.status).toBe("approved");
   });
 
-  it("确认 value 候选 → 封口旧 value 并连 supersedes 边", () => {
+  it("确认 value 候选不再自动封口其余 value（价值观按条独立，并存≠取代）", () => {
     const oldValue = seedValue("成长第一");
     const { sessionId, entryId } = freshSessionEntry();
     const cid = insertCandidate(
@@ -159,10 +159,25 @@ describe("候选暂存与确认（staging）：确认前不碰正式记忆，确
       sessionId,
     );
     const memoryId = approveCandidate(cid);
-    expect(getMemory(oldValue)?.status).toBe("superseded");
+    // 新旧两条价值并存且都 active：取代关系必须显式声明，不能因为「排序变化」连坐
+    expect(getMemory(oldValue)?.status).toBe("active");
     expect(getMemory(memoryId)?.status).toBe("active");
+  });
+
+  it("显式 supersedes 的 value 候选只封口指定的那一条，其余价值不受影响", () => {
+    const replaced = seedValue("成长第一");
+    const kept = seedValue("自由第二");
+    const { sessionId, entryId } = freshSessionEntry();
+    const cid = insertCandidate(
+      { type: "value", content: "我重视稳定胜过成长", importance: 0.9, supersedes: replaced },
+      entryId,
+      sessionId,
+    );
+    const memoryId = approveCandidate(cid);
+    expect(getMemory(replaced)?.status).toBe("superseded");
+    expect(getMemory(kept)?.status).toBe("active");
     const edges = linksFor([memoryId]).get(memoryId) ?? [];
-    expect(edges.some((e) => e.rel === "supersedes" && e.to_id === oldValue)).toBe(true);
+    expect(edges.some((e) => e.rel === "supersedes" && e.to_id === replaced)).toBe(true);
   });
 
   it("显式 supersedes：确认 claim 候选可推翻 claim", () => {
