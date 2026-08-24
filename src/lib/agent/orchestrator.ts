@@ -1,9 +1,5 @@
 import { resolveProvider, resolveSearcher, searcherReady } from "@/lib/providers/registry";
-import {
-  gatherWebMaterial,
-  type WebMaterial,
-  type WebSource,
-} from "@/lib/providers/web-search";
+import { gatherWebMaterial, type WebMaterial } from "@/lib/providers/web-search";
 import type { ContentPart } from "@/lib/providers/types";
 import { consolidateSession } from "@/lib/memory/consolidate";
 import { buildContextBundle, computeVectorBoostMap } from "@/lib/memory/retrieve";
@@ -16,33 +12,23 @@ import {
   getAiSettings,
   getSession,
   listMessages,
+  listReferencedMemoryIds,
   touchSession,
 } from "@/lib/memory/repo";
 import { buildSystemPrompt } from "./system-prompt";
-
-export interface RetrievedMemorySummary {
-  id: number;
-  title: string;
-  type: string;
-  theme?: string | null;
-  content: string;
-  relation: "constitution" | "related" | "tension" | "openLoop";
-}
-
-export type OrchestratorEvent =
-  | { type: "meta"; sessionId: number; title: string }
-  | { type: "status"; text: string }
-  | { type: "context"; themes: string[]; memories: RetrievedMemorySummary[] }
-  | { type: "web"; mode: "read" | "search"; sources: WebSource[] }
-  | { type: "reasoning"; text: string }
-  | { type: "content"; text: string }
-  | { type: "done"; candidatesAdded: number };
+import type {
+  OrchestratorEvent,
+  RetrievedMemorySummary,
+  RetrievalTrace,
+} from "./chat-events";
 
 const HISTORY_LIMIT = 12;
 
 export interface RunChatOptions {
   /** 用户开启「联网」：回复前拉取外部资料注入上下文。未配 key 或失败时静默跳过。 */
   webSearch?: boolean;
+  /** 用户开启「深度思考」：激活多维度认知探针、时间线回溯与高强度长程推理。 */
+  deepThinking?: boolean;
 }
 
 /**
@@ -62,24 +48,83 @@ export async function* runChat(
   if (!session) {
     session = createSession(deriveTitle(trimmed || "（图片）"));
   }
-  yield { type: "meta", sessionId: session.id, title: session.title };
-
-  addMessage(session.id, "user", trimmed, undefined, images);
+  const userMsg = addMessage(session.id, "user", trimmed, undefined, images);
   addEntry("chat", trimmed || `（发送了 ${images?.length ?? 0} 张图片）`, session.id);
   if (session.title === "新对话") {
     touchSession(session.id, { title: deriveTitle(trimmed || "图片对话") });
   }
+  yield {
+    type: "meta",
+    sessionId: session.id,
+    title: session.title,
+    userMessageId: userMsg.id,
+  };
 
   yield { type: "status", text: "正在调取历史记忆与价值观..." };
 
   const settings = getAiSettings();
   const vectorBoostById = await computeVectorBoostMap(settings, trimmed);
-  const bundle = buildContextBundle(trimmed, { vectorBoostById: vectorBoostById ?? undefined });
 
-  // 记忆检索摘要：向前端透出本次调取的记忆切面（张力、开放回路、相关记忆与宪章）
+  // 会话内去重：本会话已引用过的记忆 id 不再重复注入（宪章除外，见 retrieve.ts）。
+  // 扫整个会话而非最近 12 条——历史引用与模型上下文是两个不同的问题。
+  const citedIds = new Set(listReferencedMemoryIds(session.id));
+
+  const bundle = buildContextBundle(trimmed, {
+    vectorBoostById: vectorBoostById ?? undefined,
+    deepThinking: opts.deepThinking === true,
+    excludeIds: [...citedIds],
+  });
+
+  // 本轮检索依据：只描述实际调取到了什么，不声称"调用了工具"。
+  const traces: RetrievalTrace[] = [];
+
+  // 1. 核心记忆探针
+  const memCount = bundle.constitution.length + bundle.related.length;
+  const memTrace: RetrievalTrace = {
+    id: "trace_mem",
+    name: "核心宪章与相关记忆探查",
+    description: `检索到 ${bundle.constitution.length} 条长期画像/价值观与 ${bundle.related.length} 条相关主张`,
+    count: memCount,
+    details: [...bundle.constitution, ...bundle.related]
+      .slice(0, 5)
+      .map((m) => m.title || m.content.slice(0, 24)),
+  };
+  traces.push(memTrace);
+  yield { type: "trace", trace: memTrace };
+
+  // 2. 矛盾张力探针
+  if (bundle.tensions.length > 0) {
+    const tensionTrace: RetrievalTrace = {
+      id: "trace_tension",
+      name: "历史矛盾与对立面比对",
+      description: `沿矛盾与推翻边线索交叉比对出 ${bundle.tensions.length} 条对立观点`,
+      count: bundle.tensions.length,
+      details: bundle.tensions.map((m) => m.title || m.content.slice(0, 24)),
+    };
+    traces.push(tensionTrace);
+    yield { type: "trace", trace: tensionTrace };
+  }
+
+  // 3. 时间线 / 纠结回路探针
+  const timelineCount = (bundle.timeline?.length ?? 0) + bundle.openLoops.length;
+  if (timelineCount > 0) {
+    const timelineTrace: RetrievalTrace = {
+      id: "trace_timeline",
+      name: "信念演进与未解纠结溯源",
+      description: `回溯了 ${bundle.openLoops.length} 条反复出现的纠结回路与 ${bundle.timeline?.length ?? 0} 条时间线主张`,
+      count: timelineCount,
+      details: [...bundle.openLoops, ...(bundle.timeline ?? [])]
+        .slice(0, 5)
+        .map((m) => m.title || m.content.slice(0, 24)),
+    };
+    traces.push(timelineTrace);
+    yield { type: "trace", trace: timelineTrace };
+  }
+
+  // 记忆检索摘要：向前端透出本次调取的记忆切面（张力、开放回路、时间线、相关记忆与宪章）
   const memorySummaries: RetrievedMemorySummary[] = [];
   const seenIds = new Set<number>();
-  for (const m of bundle.tensions.slice(0, 2)) {
+  for (const m of bundle.tensions.slice(0, 3)) {
     if (!seenIds.has(m.id)) {
       seenIds.add(m.id);
       memorySummaries.push({
@@ -89,6 +134,19 @@ export async function* runChat(
         theme: m.theme,
         content: m.content,
         relation: "tension",
+      });
+    }
+  }
+  for (const m of (bundle.timeline ?? []).slice(0, 3)) {
+    if (!seenIds.has(m.id)) {
+      seenIds.add(m.id);
+      memorySummaries.push({
+        id: m.id,
+        title: m.title || m.content.slice(0, 24),
+        type: m.type,
+        theme: m.theme,
+        content: m.content,
+        relation: "timeline",
       });
     }
   }
@@ -132,11 +190,13 @@ export async function* runChat(
     }
   }
 
-  if (memorySummaries.length > 0 || bundle.themes.length > 0) {
+  if (memorySummaries.length > 0 || bundle.themes.length > 0 || traces.length > 0) {
     yield {
       type: "context",
       themes: bundle.themes,
       memories: memorySummaries,
+      traces,
+      deepThinking: opts.deepThinking === true,
     };
   }
 
@@ -151,6 +211,15 @@ export async function* runChat(
         const material = await gatherWebMaterial(searcher, trimmed);
         if (material.sources.length > 0) {
           web = { mode: material.mode, sources: material.sources };
+          const webTrace: RetrievalTrace = {
+            id: "trace_web",
+            name: "外部事实与实时资料校准",
+            description: `从公共互联网检索到 ${web.sources.length} 篇相关资料`,
+            count: web.sources.length,
+            details: web.sources.map((s) => s.title),
+          };
+          traces.push(webTrace);
+          yield { type: "trace", trace: webTrace };
           yield {
             type: "web",
             mode: web.mode,
@@ -168,11 +237,21 @@ export async function* runChat(
     }
   }
 
-  yield { type: "status", text: "正在深度思考与对照..." };
+  yield {
+    type: "status",
+    text: opts.deepThinking
+      ? "多维认知探针已就绪，正在进行深度推演..."
+      : "正在深度思考与对照...",
+  };
 
   const serializedMemories =
-    memorySummaries.length > 0 || bundle.themes.length > 0
-      ? JSON.stringify({ themes: bundle.themes, memories: memorySummaries })
+    memorySummaries.length > 0 || bundle.themes.length > 0 || traces.length > 0
+      ? JSON.stringify({
+          themes: bundle.themes,
+          memories: memorySummaries,
+          traces,
+          deepThinking: opts.deepThinking === true,
+        })
       : null;
 
   const serializedWebSources =
@@ -182,7 +261,7 @@ export async function* runChat(
             title,
             url,
             publishedDate,
-          }))
+          })),
         )
       : null;
 
@@ -192,7 +271,7 @@ export async function* runChat(
   const messages = [
     {
       role: "system" as const,
-      content: buildSystemPrompt(bundle, getAssistantPreferences(), web),
+      content: buildSystemPrompt(bundle, getAssistantPreferences(), web, opts.deepThinking === true),
     },
     ...history.map((m) => ({ role: m.role, content: rebuildContent(m) })),
     { role: "user" as const, content: buildUserContent(trimmed, images) },
@@ -207,7 +286,7 @@ export async function* runChat(
     undefined,
     undefined,
     serializedWebSources ?? undefined,
-    serializedMemories ?? undefined
+    serializedMemories ?? undefined,
   );
   let lastFlush = Date.now();
   const flush = () => {
@@ -219,8 +298,9 @@ export async function* runChat(
   };
 
   let reasoning = "";
+  const maxTokens = opts.deepThinking ? 8192 : 4096;
   for await (const chunk of provider.chatStream(messages, {
-    maxTokens: 4096,
+    maxTokens,
     temperature: 0.7,
   })) {
     if (chunk.type === "content") {

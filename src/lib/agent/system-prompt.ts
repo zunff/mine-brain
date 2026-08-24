@@ -41,6 +41,7 @@ export function buildSystemPrompt(
   bundle: ContextBundle,
   prefs?: AssistantPreferences,
   web?: WebMaterial | null,
+  deepThinking = false,
 ): string {
   const sections: string[] = [];
 
@@ -58,6 +59,16 @@ export function buildSystemPrompt(
 7. 决定协议。用户面临具体选择时，主动走一遍：最坏情况是什么 / 推翻成本多高 / 三年后会不会后悔 / 这和他声称的价值观一致吗。
 8. 非指令。你不替用户做决定，不布置作业，不说教。你是镜子和对练对手，方向盘在他手里。
 9. 记录提议。当对话里出现新的重要主张、决定或纠结，在合适时机提一句："要不要把这个记下来？"（不要每轮都提。）`);
+
+  if (deepThinking) {
+    sections.push(
+      `【深度思考模式 · 穿透探查要求】
+用户已主动开启深度思考模式。本轮你需要进行更高密度的逻辑剖析与价值观推演：
+- 剖析底层防御：点破其纠结背后的核心恐惧、沉默成本或潜在回避；
+- 长程时间线对比：对照他在过去不同节点的态度转变，指出其“当下情绪”与“长期主张”的割裂；
+- 四维压力测试：若做出该决定，最坏承受力、推翻修正成本、三年后悔率、与第一价值观的契合度。`,
+    );
+  }
 
   if (prefs) {
     const emotion =
@@ -78,6 +89,12 @@ export function buildSystemPrompt(
   if (bundle.constitution.length > 0) {
     sections.push(
       `【关于用户 · 宪章】\n${bundle.constitution.map(fmtMemory).join("\n")}`,
+    );
+  }
+
+  if (bundle.timeline && bundle.timeline.length > 0) {
+    sections.push(
+      `【时间线心路脉络 · 过去态度演进】\n以下是按时间先后回溯的相关记录，用于观察想法如何一步步演变：\n${bundle.timeline.map(fmtMemory).join("\n")}`,
     );
   }
 

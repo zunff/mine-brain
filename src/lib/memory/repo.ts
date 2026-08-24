@@ -75,6 +75,62 @@ export function getSession(id: number): SessionRow | null {
   );
 }
 
+export function renameSession(id: number, title: string): void {
+  getDb()
+    .prepare("UPDATE sessions SET title = ?, updated_at = ? WHERE id = ?")
+    .run(title, nowIso(), id);
+}
+
+export function deleteSession(id: number): void {
+  // entries/memories 是长期资产，保留但解除与会话的关联；messages 由 FK 级联删除
+  getDb().prepare("UPDATE entries SET session_id = NULL WHERE session_id = ?").run(id);
+  getDb().prepare("UPDATE memories SET session_id = NULL WHERE session_id = ?").run(id);
+  getDb().prepare("DELETE FROM sessions WHERE id = ?").run(id);
+}
+
+/** 编辑消息并重发：从该消息起截断（旧问答被替换，而非追加）。
+ * 会话内容一旦被编辑，该会话待确认的候选就失去来源一致性，一并标为 rejected；
+ * 已确认的长期记忆不可变，不受影响。 */
+export function truncateMessagesFrom(sessionId: number, fromMessageId: number): void {
+  getDb()
+    .prepare("DELETE FROM messages WHERE session_id = ? AND id >= ?")
+    .run(sessionId, fromMessageId);
+  getDb()
+    .prepare(
+      `UPDATE memory_candidates SET status = 'rejected', decided_at = ?
+       WHERE session_id = ? AND status = 'pending'`,
+    )
+    .run(nowIso(), sessionId);
+}
+
+/** 收集某会话历史中所有已被引用过的记忆 id（全面去重：扫整个会话，不受 HISTORY_LIMIT 截断影响）。 */
+export function listReferencedMemoryIds(sessionId: number): number[] {
+  const rows = getDb()
+    .prepare(
+      `SELECT retrieved_memories FROM messages
+       WHERE session_id = ? AND role = 'assistant' AND retrieved_memories IS NOT NULL`,
+    )
+    .all(sessionId) as Array<{ retrieved_memories: string }>;
+  const ids = new Set<number>();
+  for (const r of rows) {
+    try {
+      const parsed = JSON.parse(r.retrieved_memories) as {
+        memories?: Array<{ id?: unknown }>;
+      };
+      if (Array.isArray(parsed.memories)) {
+        for (const mem of parsed.memories) {
+          if (typeof mem?.id === "number" && Number.isInteger(mem.id) && mem.id > 0) {
+            ids.add(mem.id);
+          }
+        }
+      }
+    } catch {
+      /* 视作无引用 */
+    }
+  }
+  return [...ids];
+}
+
 export function touchSession(id: number, patch?: { title?: string; summary?: string; consolidatedUpto?: number }): void {
   const s = getSession(id);
   if (!s) return;

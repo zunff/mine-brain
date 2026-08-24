@@ -13,11 +13,29 @@ UI (src/app 页面)
 
 禁止跨层：API 路由不直接碰 SQL；memory 层不 import 任何具体厂商 SDK；UI 不直接调 lib。
 
+## 前端 feature 目录边界
+
+- `src/app/<route>/page.tsx` 只做路由级容器：组合 feature 组件与 hooks、持有页面级少量状态（如消息正文、开关偏好）。聊天页 `page.tsx` 就此收敛为编排层。
+- feature 专属展示组件、共享类型、客户端 hooks 放 `src/components/<feature>/` 与 `src/components/<feature>/hooks/`。
+- 客户端 hooks 必须经 API 路由取数，不得 import `lib/` 下的 repo/db/provider（依赖只能向下）。
+- 一个 hook 一个状态域：会话 / 流式连接 / 输入编辑 / 滚动各自独立，页面负责组合与事件编排；禁止再造一个「万能 useChatPage」。
+- 状态所有权在抽离后必须保持单一：流式与会话的状态域谁拥有谁负责更新，跨域的收尾回调（如 done→拉候选）经 Ref 注入汇合于页面层。
+- 聊天页仍是「深度思考=同一管道的展示面」：这些组件与 hooks 是纯展示/状态壳，不产生第二条数据流。
+
 ## 核心数据流
 
 1. **对话**：POST /api/chat → orchestrator 检索记忆（标签命中 + 生活域 + 时近 + 重要性 + 矛盾沿边专项 + 开放回路专项）→ 组装上下文包 → Provider 流式回复 → 客户端渲染。（可选）用户开「联网」时，组 prompt 前先经 `searcher` 拉外部资料注入上下文包，失败静默跳过。
 2. **写回**：会话结束后 POST /api/consolidate 用 `extractor` 角色从对话抽取候选记忆（主张/决定/情绪/纠结），先入 staging，确认后入库并生成关联边与标签。
 3. **引导**：首次运行检测无 profile → /onboarding 页面内填写「关于我」，不要求用户手工改任何文件。
+
+## 深度思考（同一管道，不是另一条管道)
+
+深度思考不是独立的 AI 调用链：它只是 `runChat` 同一条 async-generator 管道上的按请求布尔量 `deepThinking`——角色、Provider 流、写回路径完全相同，只放大上下文预算并补时间线。普通模式**不**构造时间线（`buildContextBundle` 返回 `timeline: undefined`），这是隔离的唯一体现，不是两套代码。
+
+- 资源上限：张力 `tensionLimit` 深度 8 / 普通 5；开放回路 `openLoopLimit` 深度 5 / 普通 3。
+- 时间线：仅深度模式构造。只收 `type ∈ {claim, decision, insight}` 且 `status ∈ {active, superseded}` 的记忆，按生活域/标签命中过滤，按时间排序、最新立场在最后，`MAX_TIMELINE_SPANS = 6` 跨度采样保最新；排除 `archived` 与软删。被推翻的旧立场保留在时间线里（历史演进而非抹去）。
+- 前端身份：每条消息带 `deepThinking` 标记，思考与检索区文案按它区分；UI 开关经 `localStorage` 记住偏好。
+- 上述契约由 tests/retrieve.test.ts「buildContextBundle — 深度思考模式」固化为回归测试，改动必须同步该组测试。
 
 ## 关键文件
 

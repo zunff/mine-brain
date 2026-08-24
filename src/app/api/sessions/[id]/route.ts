@@ -1,5 +1,4 @@
-import { getDb, nowIso } from "@/lib/db/client";
-import { getSession, listMessages } from "@/lib/memory/repo";
+import { deleteSession, getSession, listMessages, renameSession } from "@/lib/memory/repo";
 import { isSessionStreaming } from "@/lib/agent/stream-manager";
 
 export const dynamic = "force-dynamic";
@@ -42,14 +41,20 @@ export async function GET(
 
     let retrievedMemories: unknown[] | undefined;
     let retrievedThemes: string[] | undefined;
+    let toolTraces: unknown[] | undefined;
+    let deepThinking: boolean | undefined;
     if (m.retrieved_memories) {
       try {
         const parsed = JSON.parse(m.retrieved_memories) as {
           themes?: string[];
           memories?: unknown[];
+          traces?: unknown[];
+          deepThinking?: boolean;
         };
         if (Array.isArray(parsed.memories)) retrievedMemories = parsed.memories;
         if (Array.isArray(parsed.themes)) retrievedThemes = parsed.themes;
+        if (Array.isArray(parsed.traces)) toolTraces = parsed.traces;
+        if (typeof parsed.deepThinking === "boolean") deepThinking = parsed.deepThinking;
       } catch {
         /* ignore parse error */
       }
@@ -64,6 +69,8 @@ export async function GET(
         retrievedMemories && retrievedMemories.length > 0 ? retrievedMemories : undefined,
       retrievedThemes:
         retrievedThemes && retrievedThemes.length > 0 ? retrievedThemes : undefined,
+      toolTraces: toolTraces && toolTraces.length > 0 ? toolTraces : undefined,
+      deepThinking,
     };
   });
   const isStreaming = isSessionStreaming(sessionId);
@@ -84,9 +91,7 @@ export async function PATCH(
   if (!Number.isInteger(sessionId) || !body?.title?.trim()) {
     return Response.json({ error: "bad request" }, { status: 400 });
   }
-  getDb()
-    .prepare("UPDATE sessions SET title = ?, updated_at = ? WHERE id = ?")
-    .run(body.title.trim().slice(0, 60), nowIso(), sessionId);
+  renameSession(sessionId, body.title.trim().slice(0, 60));
   return Response.json({ ok: true });
 }
 
@@ -99,13 +104,10 @@ export async function DELETE(
   if (!Number.isInteger(sessionId)) {
     return Response.json({ error: "bad id" }, { status: 400 });
   }
-  // messages 级联删除；entries/memories 是长期资产，保留但解除关联
-  getDb()
-    .prepare("UPDATE entries SET session_id = NULL WHERE session_id = ?")
-    .run(sessionId);
-  getDb()
-    .prepare("UPDATE memories SET session_id = NULL WHERE session_id = ?")
-    .run(sessionId);
-  getDb().prepare("DELETE FROM sessions WHERE id = ?").run(sessionId);
+  // 后台常驻流仍在写入该会话时拒绝删除，避免僵尸写指向已删除的会话
+  if (isSessionStreaming(sessionId)) {
+    return Response.json({ error: "session is streaming" }, { status: 409 });
+  }
+  deleteSession(sessionId);
   return Response.json({ ok: true });
 }

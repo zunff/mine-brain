@@ -23,6 +23,8 @@ export interface ContextBundle {
   tensions: MemoryRow[];
   /** 开放回路：同域未解的反复纠结 */
   openLoops: MemoryRow[];
+  /** 时间线演化：同域下按时间先后回溯的心路历程 */
+  timeline?: MemoryRow[];
   /** 本次命中的生活域 */
   themes: string[];
 }
@@ -30,6 +32,10 @@ export interface ContextBundle {
 export interface RetrievalOpts {
   /** 第 5 条信号：记忆 id → 余弦得分映射（由调用方按当前 embedding 模型预计算）。 */
   vectorBoostById?: Map<number, number>;
+  /** 深度思考模式：扩大张力探测与长程时间线溯源深度 */
+  deepThinking?: boolean;
+  /** 排除本会话已引用过的记忆 id：避免跨轮重复注入同一批卡片 */
+  excludeIds?: number[];
 }
 
 const THEME_KEYWORDS: Record<string, string[]> = {
@@ -72,6 +78,7 @@ export function buildContextBundle(message: string, opts: RetrievalOpts = {}): C
   const now = new Date();
   const tagSet = new Set(tags);
   const themeSet = new Set(themes);
+  const excluded = new Set(opts.excludeIds ?? []);
 
   const constitution = all
     .filter((m) => (m.type === "profile" || m.type === "value") && m.status === "active")
@@ -79,7 +86,9 @@ export function buildContextBundle(message: string, opts: RetrievalOpts = {}): C
     .slice(0, 14);
 
   const scored = all
-    .filter((m) => m.status === "active" && !constitution.includes(m))
+    .filter(
+      (m) => m.status === "active" && !constitution.includes(m) && !excluded.has(m.id),
+    )
     .map((m) => {
       const mtags = tagMap.get(m.id) ?? [];
       const tagHits = mtags.filter((t) => tagSet.has(t)).length;
@@ -100,7 +109,9 @@ export function buildContextBundle(message: string, opts: RetrievalOpts = {}): C
   const fallback =
     scored.length === 0
       ? all
-          .filter((m) => m.status === "active" && !constitution.includes(m))
+          .filter(
+            (m) => m.status === "active" && !constitution.includes(m) && !excluded.has(m.id),
+          )
           .sort((a, b) => b.importance - a.importance)
           .slice(0, 4)
       : scored.map((x) => x.m);
@@ -118,24 +129,59 @@ export function buildContextBundle(message: string, opts: RetrievalOpts = {}): C
     }
   }
   const byId = new Map(all.map((m) => [m.id, m]));
+  const tensionLimit = opts.deepThinking ? 8 : 5;
   const tensions = [...tensionIds]
     .map((id) => byId.get(id))
-    .filter((m): m is MemoryRow => !!m)
-    .slice(0, 5);
+    .filter((m): m is MemoryRow => !!m && !excluded.has(m.id))
+    .slice(0, tensionLimit);
 
   // 开放回路专项：命中域里仍未解的纠结
+  const openLoopLimit = opts.deepThinking ? 5 : 3;
   const openLoops = all
     .filter(
       (m) =>
         m.status === "active" &&
         m.type === "question" &&
         !related.includes(m) &&
+        !excluded.has(m.id) &&
         (!m.theme || themeSet.size === 0 || themeSet.has(m.theme)),
     )
     .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
-    .slice(0, 3);
+    .slice(0, openLoopLimit);
 
-  return { constitution, related, tensions, openLoops, themes };
+  // 时间线要看见「曾相信过什么怎么变」→ superseded 历史主张也入列（归档/驳回除外）。
+  // 不能 slice 前 6 条（会丢掉最新立场）：跨度采样保证最新一次立场始终在列。
+  let timeline: MemoryRow[] | undefined;
+  if (opts.deepThinking && (themeSet.size > 0 || tagSet.size > 0)) {
+    const timelineAll = listMemories({ includeInactive: true, limit: 2000 });
+    const timelineCandidates = timelineAll
+      .filter(
+        (m) =>
+          (m.status === "active" || m.status === "superseded") &&
+          (m.type === "claim" || m.type === "decision" || m.type === "insight") &&
+          !constitution.includes(m) &&
+          !excluded.has(m.id) &&
+          ((m.theme && themeSet.has(m.theme)) || (tagMap.get(m.id) ?? []).some((t) => tagSet.has(t))),
+      )
+      .sort((a, b) => (a.valid_from ?? a.created_at).localeCompare(b.valid_from ?? b.created_at));
+    const MAX_TIMELINE_SPANS = 6;
+    if (timelineCandidates.length > MAX_TIMELINE_SPANS) {
+      const latest = timelineCandidates[timelineCandidates.length - 1];
+      const head = timelineCandidates.slice(0, -1);
+      const step = head.length / (MAX_TIMELINE_SPANS - 1);
+      const picked = new Set<MemoryRow>([latest]);
+      for (let i = 0; i < MAX_TIMELINE_SPANS - 1; i++) {
+        picked.add(head[Math.min(head.length - 1, Math.floor(i * step))]);
+      }
+      timeline = [...picked].sort((a, b) =>
+        (a.valid_from ?? a.created_at).localeCompare(b.valid_from ?? b.created_at),
+      );
+    } else {
+      timeline = timelineCandidates;
+    }
+  }
+
+  return { constitution, related, tensions, openLoops, timeline, themes };
 }
 
 /**

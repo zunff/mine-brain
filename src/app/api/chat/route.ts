@@ -1,9 +1,9 @@
 import {
-  startOrJoinChatStream,
+  startChatStream,
   subscribeExistingChatStream,
   isSessionStreaming,
 } from "@/lib/agent/stream-manager";
-import type { OrchestratorEvent } from "@/lib/agent/orchestrator";
+import type { OrchestratorEvent } from "@/lib/agent/chat-events";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -16,13 +16,18 @@ interface ChatBody {
   images?: string[];
   /** 用户开启联网：回复前拉取外部资料（未配置搜索 key 时服务端自动忽略） */
   webSearch?: boolean;
+  /** 用户开启深度思考：激活多维认知探针与深度推演 */
+  deepThinking?: boolean;
+  /** 编辑消息并重发：从该消息 id 起截断旧问答后再启动生成 */
+  replaceFromMessageId?: number;
 }
 
 const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
 
 /**
  * POST /api/chat
- * 启动或加入后台生成流。后台任务常驻执行并持续存库，不随单个 HTTP 连接中断而终止。
+ * 启动后台生成流。后台任务常驻执行并持续存库，不随单个 HTTP 连接中断而终止。
+ * 若该会话已有活跃流，返回 409 拒绝并发，避免重复消息被静默吞掉。
  */
 export async function POST(req: Request): Promise<Response> {
   let body: ChatBody;
@@ -39,14 +44,40 @@ export async function POST(req: Request): Promise<Response> {
     return Response.json({ error: "message required" }, { status: 400 });
   }
 
-  const numericSessionId =
-    body.sessionId != null && body.sessionId !== "" && !Number.isNaN(Number(body.sessionId))
-      ? Number(body.sessionId)
-      : null;
+  let numericSessionId: number | null = null;
+  if (body.sessionId != null && body.sessionId !== "") {
+    const n = Number(body.sessionId);
+    if (!Number.isInteger(n) || n <= 0) {
+      return Response.json({ error: "bad sessionId" }, { status: 400 });
+    }
+    numericSessionId = n;
+  }
 
-  const { sessionId, subscribe } = startOrJoinChatStream(numericSessionId, rawMessage, images, {
+  // 编辑重发仅在 stream-manager 排除了并发冲突之后才截断，409 绝不静默删数据。
+  let replaceFromMessageId: number | undefined;
+  if (body.replaceFromMessageId != null) {
+    if (
+      numericSessionId == null ||
+      !Number.isInteger(body.replaceFromMessageId) ||
+      body.replaceFromMessageId <= 0
+    ) {
+      return Response.json({ error: "bad replaceFromMessageId" }, { status: 400 });
+    }
+    replaceFromMessageId = body.replaceFromMessageId;
+  }
+
+  const result = startChatStream(numericSessionId, rawMessage, images, {
     webSearch: body.webSearch === true,
+    deepThinking: body.deepThinking === true,
+    ...(replaceFromMessageId != null ? { replaceFromMessageId } : {}),
   });
+  if ("conflict" in result) {
+    return Response.json(
+      { error: "session busy", sessionId: result.sessionId },
+      { status: 409 },
+    );
+  }
+  const { sessionId, subscribe } = result;
 
   const encoder = new TextEncoder();
   let unsubscribe: (() => void) | null = null;

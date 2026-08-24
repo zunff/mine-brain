@@ -1,10 +1,6 @@
-import {
-  runChat,
-  type OrchestratorEvent,
-  type RunChatOptions,
-  type RetrievedMemorySummary,
-} from "./orchestrator";
-import { getSession, createSession } from "@/lib/memory/repo";
+import { runChat, type RunChatOptions } from "./orchestrator";
+import type { OrchestratorEvent, RetrievedMemorySummary } from "./chat-events";
+import { createSession, getSession, truncateMessagesFrom } from "@/lib/memory/repo";
 
 export interface ActiveSessionStream {
   sessionId: number;
@@ -37,18 +33,21 @@ export function getActiveStream(sessionId: number): ActiveSessionStream | undefi
 }
 
 /**
- * 启动新的后台流式任务，或订阅已存在的后台流。
+ * 启动新的后台流式任务并返回订阅入口（仅供 POST /api/chat 调用）。
  * 核心特性：客户端即使断开 HTTP 连接，后台任务仍会完整执行并持续写入 SQLite。
+ * 若该会话已有活跃流，返回 conflict——不创建会话、不丢弃本次消息、不启动重复生成。
  */
-export function startOrJoinChatStream(
+export function startChatStream(
   sessionId: number | null,
   userText: string,
   images?: string[],
-  opts: RunChatOptions = {},
-): {
-  sessionId: number;
-  subscribe: (onEvent: (evt: OrchestratorEvent) => void) => () => void;
-} {
+  opts: RunChatOptions & { replaceFromMessageId?: number } = {},
+):
+  | {
+      sessionId: number;
+      subscribe: (onEvent: (evt: OrchestratorEvent) => void) => () => void;
+    }
+  | { conflict: true; sessionId: number } {
   // 1. 预先确定 sessionId
   let resolvedSessionId: number;
   if (sessionId) {
@@ -64,7 +63,18 @@ export function startOrJoinChatStream(
     resolvedSessionId = created.id;
   }
 
-  // 2. 如果已经有正在运行的流任务，直接复用
+  // 2. 该会话正被另一请求生成中：拒绝并发，避免本次消息被悄悄丢弃
+  if (isSessionStreaming(resolvedSessionId)) {
+    return { conflict: true, sessionId: resolvedSessionId };
+  }
+
+  // 编辑重发：冲突已排除，这一步截断旧问答才安全——忙会话的 409 绝不静默删数据。
+  // 截断发生在注册新流与生成器首次 DB 写之前，路由层无需再自行执行数据操作。
+  if (opts.replaceFromMessageId != null) {
+    truncateMessagesFrom(resolvedSessionId, opts.replaceFromMessageId);
+  }
+
+  // 3. 没有活跃流，则新建流并启动后台生成
   let active = activeStreams.get(resolvedSessionId);
   if (!active || active.isDone) {
     if (active?.cleanupTimer) clearTimeout(active.cleanupTimer);
@@ -140,7 +150,7 @@ export function startOrJoinChatStream(
     })();
   }
 
-  // 3. 返回订阅函数
+  // 4. 返回订阅函数（replay + 热挂 listener）
   const targetStream = active;
   const subscribe = (onEvent: (evt: OrchestratorEvent) => void): (() => void) => {
     // 立即回放所有已生成的历史事件

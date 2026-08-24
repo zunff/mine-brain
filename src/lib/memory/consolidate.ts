@@ -97,58 +97,71 @@ export function selectFreshBatch(
   return fresh;
 }
 
+// 单进程内按会话持有整理锁：自动整理（每轮 done 后）与手动整理共用，
+// 防止同一批消息被并发抽取两次、各自推进 consolidated_upto 造成重复候选。
+const consolidatingSessions = new Set<number>();
+export function isConsolidating(sessionId: number): boolean {
+  return consolidatingSessions.has(sessionId);
+}
+
 /** 抽取并入库。返回新增记忆条数；抛错由调用方兜底。 */
 export async function consolidateSession(sessionId: number): Promise<number> {
-  const session = getSession(sessionId);
-  if (!session) throw new Error(`session ${sessionId} not found`);
+  if (consolidatingSessions.has(sessionId)) return 0; // 已有整理在进行：跳过本轮（另一请求会推进 upto）
+  consolidatingSessions.add(sessionId);
+  try {
+    const session = getSession(sessionId);
+    if (!session) throw new Error(`session ${sessionId} not found`);
 
-  // 只取未整理消息里最近的一批（升序）；批次内部保证完整、连续。
-  const fresh = selectFreshBatch(
-    listMessagesAfter(sessionId, session.consolidated_upto, 200),
-  );
-  // 至少一轮完整对话才值得整理；不够就整批留到下次（不推进 upto）
-  if (!fresh.some((m) => m.role === "user") || !fresh.some((m) => m.role === "assistant")) {
-    return 0;
+    // 只取未整理消息里最近的一批（升序）；批次内部保证完整、连续。
+    const fresh = selectFreshBatch(
+      listMessagesAfter(sessionId, session.consolidated_upto, 200),
+    );
+    // 至少一轮完整对话才值得整理；不够就整批留到下次（不推进 upto）
+    if (!fresh.some((m) => m.role === "user") || !fresh.some((m) => m.role === "assistant")) {
+      return 0;
+    }
+
+    const conversation = fresh
+      .map((m) => `${m.role === "user" ? "用户" : "伙伴"}：${m.content}`)
+      .join("\n\n");
+
+    const digest = listMemories({ limit: 60 })
+      .map((m) => `${m.id} | ${m.type} | ${(m.title || m.content).slice(0, 70)}`)
+      .join("\n");
+
+    const settings = getAiSettings();
+    const provider = resolveProvider(settings, "extractor");
+    const res = await provider.chat(
+      [
+        { role: "system", content: "你是严谨的记忆整理员，只输出合法 JSON。" },
+        { role: "user", content: buildExtractorPrompt(conversation, digest) },
+      ],
+      { maxTokens: 4000, temperature: 0.2 },
+    );
+
+    const parsed = parseJsonLoose<ExtractResult>(res.content);
+    if (!parsed || !Array.isArray(parsed.items)) {
+      throw new Error("extractor returned unparseable output");
+    }
+
+    const entryId = addEntry("chat", conversation.slice(0, 8000), sessionId);
+    let candidatesAdded = 0;
+    for (const item of parsed.items.slice(0, 12)) {
+      if (!item.content?.trim()) continue;
+      insertCandidate(item, entryId, sessionId);
+      candidatesAdded++;
+    }
+
+    touchSession(sessionId, {
+      consolidatedUpto: Math.max(...fresh.map((m) => m.id)),
+      summary: parsed.session_summary?.slice(0, 300) ?? session.summary ?? undefined,
+    });
+
+    // 候选入暂存即可，不碰正式 memories；向量化在用户确认后（approveCandidate）再做。
+    return candidatesAdded;
+  } finally {
+    consolidatingSessions.delete(sessionId);
   }
-
-  const conversation = fresh
-    .map((m) => `${m.role === "user" ? "用户" : "伙伴"}：${m.content}`)
-    .join("\n\n");
-
-  const digest = listMemories({ limit: 60 })
-    .map((m) => `${m.id} | ${m.type} | ${(m.title || m.content).slice(0, 70)}`)
-    .join("\n");
-
-  const settings = getAiSettings();
-  const provider = resolveProvider(settings, "extractor");
-  const res = await provider.chat(
-    [
-      { role: "system", content: "你是严谨的记忆整理员，只输出合法 JSON。" },
-      { role: "user", content: buildExtractorPrompt(conversation, digest) },
-    ],
-    { maxTokens: 4000, temperature: 0.2 },
-  );
-
-  const parsed = parseJsonLoose<ExtractResult>(res.content);
-  if (!parsed || !Array.isArray(parsed.items)) {
-    throw new Error("extractor returned unparseable output");
-  }
-
-  const entryId = addEntry("chat", conversation.slice(0, 8000), sessionId);
-  let candidatesAdded = 0;
-  for (const item of parsed.items.slice(0, 12)) {
-    if (!item.content?.trim()) continue;
-    insertCandidate(item, entryId, sessionId);
-    candidatesAdded++;
-  }
-
-  touchSession(sessionId, {
-    consolidatedUpto: Math.max(...fresh.map((m) => m.id)),
-    summary: parsed.session_summary?.slice(0, 300) ?? session.summary ?? undefined,
-  });
-
-  // 候选入暂存即可，不碰正式 memories；向量化在用户确认后（approveCandidate）再做。
-  return candidatesAdded;
 }
 
 /** 把新记忆批量嵌入并按 (model, dims) 存元数据。任何失败都不抛，交给调用方兜底。 */
