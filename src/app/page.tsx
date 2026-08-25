@@ -11,6 +11,7 @@ import ChatHeader from "@/components/chat/ChatHeader";
 import ChatEmptyState from "@/components/chat/ChatEmptyState";
 import CandidatePanel from "@/components/chat/CandidatePanel";
 import SessionDialogs from "@/components/chat/SessionDialogs";
+import PairDeleteDialog from "@/components/chat/PairDeleteDialog";
 import { useChatScroll } from "@/components/chat/hooks/useChatScroll";
 import { useChatComposer } from "@/components/chat/hooks/useChatComposer";
 import {
@@ -58,6 +59,15 @@ export default function ChatPage() {
 
   // Copy state
   const [copiedId, setCopiedId] = useState<number | string | null>(null);
+
+  // 删除某一轮问答：确认框保存预览，确认后硬删并以重载对齐后续索引
+  const [pendingPairDelete, setPendingPairDelete] = useState<{
+    userIdx: number;
+    assistantIdx: number;
+    question: string;
+    answer: string;
+  } | null>(null);
+  const [pairDeleting, setPairDeleting] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
@@ -321,6 +331,64 @@ export default function ChatPage() {
     await send(prevUserMsg.content, prevUserMsg.images, { replaceAtIndex: userIdx });
   };
 
+  /** 请求删除某一轮问答：锁定它的问题与回复预览，弹确认框。 */
+  const handleRequestDeletePair = (assistantIdx: number) => {
+    if (stream.streaming) return;
+    const userIdx = assistantIdx - 1;
+    const userMsg = messages[userIdx];
+    if (!userMsg || userMsg.role !== "user") return;
+    setPendingPairDelete({
+      userIdx,
+      assistantIdx,
+      question: userMsg.content.slice(0, 200),
+      answer: (messages[assistantIdx]?.content ?? "").slice(0, 200),
+    });
+  };
+
+  /** 确认删除一问一答：DB 硬删后重载会话，避免后续编辑/重放因下标位移指向错消息。 */
+  const handleConfirmDeletePair = async () => {
+    const target = pendingPairDelete;
+    if (!target || !session.currentSessionId) return;
+    const userMsg = messages[target.userIdx];
+    const userMessageId = userMsg?.id ?? stream.getMessageId(target.userIdx);
+    if (userMessageId == null || userMessageId <= 0) {
+      setPendingPairDelete(null);
+      showToast("无法定位该轮消息，请刷新后重试", "error");
+      return;
+    }
+    setPairDeleting(true);
+    try {
+      const res = await fetch(
+        `/api/sessions/${session.currentSessionId}/messages/${userMessageId}`,
+        { method: "DELETE" },
+      );
+      if (!res.ok) {
+        throw new Error(
+          res.status === 409
+            ? "该会话正在生成回复，请稍后再试"
+            : res.status === 404
+              ? "该轮消息不存在或已被删除"
+              : "删除失败",
+        );
+      }
+      const data = (await res.json().catch(() => ({ deleted: 2 }))) as { deleted?: number };
+      setPendingPairDelete(null);
+      showToast("已删除这一轮问答，不再进入后续对话");
+      session.setSessions((prev) =>
+        prev.map((s) =>
+          s.id === session.currentSessionId
+            ? { ...s, message_count: Math.max(0, (s.message_count ?? 0) - (data.deleted ?? 2)) }
+            : s,
+        ),
+      );
+      await session.openSession(session.currentSessionId);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : "删除失败", "error");
+    } finally {
+      setPairDeleting(false);
+    }
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -426,11 +494,13 @@ export default function ChatPage() {
                     isCopied={copiedId === idx}
                     isEditing={composer.editingIndex === idx}
                     isLast={idx === messages.length - 1}
+                    canDeletePair={!stream.streaming && idx > 0 && messages[idx - 1]?.role === "user"}
                     onToggleReasoning={stream.toggleReasoning}
                     onToggleContext={stream.toggleContext}
                     onCopy={(i) => copyToClipboard(messages[i].content, i)}
                     onRegenerate={regenerate}
                     onEdit={handleEditMessage}
+                    onDeletePair={handleRequestDeletePair}
                   />
                 );
               })}
@@ -492,6 +562,13 @@ export default function ChatPage() {
         }}
         onDeleteSubmit={session.submitDelete}
         onDeleteCancel={() => session.setDeleteTarget(null)}
+      />
+
+      <PairDeleteDialog
+        target={pendingPairDelete}
+        deleting={pairDeleting}
+        onConfirm={handleConfirmDeletePair}
+        onCancel={() => setPendingPairDelete(null)}
       />
     </div>
   );

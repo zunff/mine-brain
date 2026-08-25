@@ -15,6 +15,7 @@ import {
   RotateCcw,
   ShieldAlert,
   Target,
+  Trash2,
   User,
 } from "lucide-react";
 import { Markdown } from "@/components/markdown";
@@ -37,11 +38,14 @@ interface ChatMessageProps {
   isCopied: boolean;
   isEditing: boolean;
   isLast: boolean;
+  /** 该轮可删除（非流式且命中一个用户消息+答复对） */
+  canDeletePair: boolean;
   onToggleReasoning: (idx: number) => void;
   onToggleContext: (idx: number) => void;
   onCopy: (idx: number) => void;
   onRegenerate: (idx: number) => void;
   onEdit: (idx: number) => void;
+  onDeletePair: (idx: number) => void;
 }
 
 export default function ChatMessage({
@@ -56,11 +60,13 @@ export default function ChatMessage({
   isCopied,
   isEditing,
   isLast,
+  canDeletePair,
   onToggleReasoning,
   onToggleContext,
   onCopy,
   onRegenerate,
   onEdit,
+  onDeletePair,
 }: ChatMessageProps) {
   const isUser = msg.role === "user";
 
@@ -306,9 +312,12 @@ export default function ChatMessage({
             {expandedReasoning && (
               <div
                 id={`reasoning-body-${idx}`}
-                className="p-3.5 border-t border-border/40 font-mono text-[11px] text-muted leading-relaxed whitespace-pre-wrap max-h-60 overflow-y-auto bg-background/30"
+                className="p-3.5 border-t border-border/40 font-mono text-[11px] text-muted leading-relaxed whitespace-pre-wrap max-h-72 overflow-y-auto bg-background/30"
               >
                 {msg.reasoning_content}
+                {isStreamingCurrent && !msg.content && (
+                  <span className="inline-block h-3.5 w-1.5 bg-accent ml-0.5 animate-pulse align-middle" />
+                )}
               </div>
             )}
           </div>
@@ -432,6 +441,16 @@ export default function ChatMessage({
                 >
                   <RotateCcw className="h-3 w-3" />
                   <span>重新思考</span>
+                </button>
+              )}
+              {canDeletePair && (
+                <button
+                  onClick={() => onDeletePair(idx)}
+                  className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity flex items-center gap-1 hover:text-foreground cursor-pointer text-muted hover:text-danger"
+                  title="删除这一轮问答（不再进入后续对话上下文）"
+                >
+                  <Trash2 className="h-3 w-3" />
+                  <span>删除</span>
                 </button>
               )}
             </>

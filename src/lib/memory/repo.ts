@@ -206,6 +206,25 @@ export function updateMessageContent(
   }
 }
 
+/** 删除一问一答：目标必须属于该会话且为用户消息，连同紧随其后的助手回复一并删除。
+ * 对话上下文靠消息硬删除天然生效（runChat 从 messages 表加载上文）；已提炼为长期记忆的内容不受影响。 */
+export function deleteMessagePair(sessionId: number, userMessageId: number): number {
+  const db = getDb();
+  const user = db
+    .prepare("SELECT id, role FROM messages WHERE id = ? AND session_id = ?")
+    .get(userMessageId, sessionId) as { id: number; role: string } | undefined;
+  if (!user || user.role !== "user") return 0;
+  const next = db
+    .prepare(
+      "SELECT id FROM messages WHERE session_id = ? AND id > ? AND role = 'assistant' ORDER BY id ASC LIMIT 1",
+    )
+    .get(sessionId, userMessageId) as { id: number } | undefined;
+  const ids = next ? [userMessageId, next.id] : [userMessageId];
+  const placeholders = ids.map(() => "?").join(", ");
+  const res = db.prepare(`DELETE FROM messages WHERE id IN (${placeholders})`).run(...ids);
+  return Number(res.changes);
+}
+
 export function listMessages(sessionId: number, limit = 200): MessageRow[] {
   return getDb()
     .prepare(
