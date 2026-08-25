@@ -6,15 +6,18 @@ import {
 } from "@/lib/providers/registry";
 import {
   addEntry,
+  embeddingsFor,
   getAiSettings,
   getSession,
   insertCandidate,
+  listCandidates,
   listMemories,
   listMessagesAfter,
   setMemoryEmbedding,
   touchSession,
 } from "./repo";
-import { type ExtractItem, type MessageRow } from "./types";
+import { type ExtractItem, type MemoryRow, type MessageRow } from "./types";
+import { cosine } from "./vector";
 
 /**
  * 会话后整理：用 extractor 角色从对话中抽取候选记忆，写入暂存（memory_candidates）。
@@ -48,6 +51,7 @@ ${existingDigest || "（空）"}
 - 情绪强烈的可加 sentiment（-1~1）
 - 对话中可能带有【外部资料】（联网检索到的互联网内容）。那是世界的说法，不是用户的经历：绝不把外部观点、新闻或他人言论提取为用户的记忆
 - 宁缺毋滥：没有值得记的就返回空数组
+- 去重：若某条抽取内容与「已有记忆清单」里某条 active 记忆语义相同（同一立场/价值观/纠结，仅措辞稍异），跳过不抽取，避免重复卡；同一主题的最新进展属于演进，用 supersedes 指明被取代的旧记忆 id 关联，而不是新建重复条
 
 对话内容：
 <conversation>
@@ -95,6 +99,84 @@ export function selectFreshBatch(
     }
   }
   return fresh;
+}
+
+/* ---------------- 候选去重：提取结果与已有记忆/待确认候选的近似比对 ---------------- */
+
+/** 文本近似度：字符 bigram Dice 系数（中文无空格，bigram 覆盖相邻字符对，对标点/空白/大小写不敏感）。 */
+export function textSimilarity(a: string, b: string): number {
+  const grams = (s: string) => {
+    const t = s.toLowerCase().replace(/[\s　\p{P}\p{S}]/gu, "");
+    const set = new Set<string>();
+    if (t.length <= 1) {
+      if (t) set.add(t);
+      return set;
+    }
+    for (let i = 0; i < t.length - 1; i++) set.add(t.slice(i, i + 2));
+    return set;
+  };
+  const A = grams(a);
+  const B = grams(b);
+  if (A.size === 0 || B.size === 0) return 0;
+  let inter = 0;
+  for (const g of A) if (B.has(g)) inter += 1;
+  return (2 * inter) / (A.size + B.size);
+}
+
+/** 文本层判重阈值：保守，只杀「几乎同一句」的重复，避免误伤同主题的立场演进。 */
+export const DUP_TEXT_THRESHOLD = 0.86;
+/** 向量层判重阈值：只认「语义高度雷同、措辞不同」的重复；比文本层更高一档，防止同域短文本的高余弦误杀。 */
+const DUP_COSINE_THRESHOLD = 0.95;
+
+/**
+ * 文本层同步判重：同批互斥 + 与已有 active 记忆 / 本会话待确认候选的近似比对。
+ * 纯函数、零 AI，供单测直接覆盖。
+ */
+export function isTextDuplicate(
+  text: string,
+  batchSeen: string[],
+  existing: Array<{ content: string }>,
+  pending: Array<{ content: string }>,
+): boolean {
+  const dup = (t: string) => textSimilarity(text, t) >= DUP_TEXT_THRESHOLD;
+  if (batchSeen.some(dup)) return true;
+  if (pending.some((p) => dup(p.content))) return true;
+  if (existing.some((m) => dup(m.content))) return true;
+  return false;
+}
+
+/** 向量层上下文：embedder 就绪过一次即复用同一批库内向量，逐条项复用。 */
+type EmbedCtx =
+  | { ready: false }
+  | {
+      ready: true;
+      embed: (texts: string[], opts: { dimensions: number }) => Promise<number[][]>;
+      dims: number;
+      embs: Array<{ memory_id: number; dims: number; vector: Float32Array }>;
+    };
+
+async function isNearDuplicate(
+  text: string,
+  memories: MemoryRow[],
+  pending: Array<{ content: string }>,
+  batchSeen: string[],
+  embedCtx: EmbedCtx,
+): Promise<boolean> {
+  // 文本层先判（覆盖 pending 与同批；memories 也必须在此比对——向量只覆盖库里记忆）
+  if (isTextDuplicate(text, batchSeen, memories, pending)) return true;
+  // 向量层：语义雷同但措辞不同的重复（embed 失败静默降级，绝不影响整理本身）
+  if (!embedCtx.ready) return false;
+  try {
+    const [qvArr] = await embedCtx.embed([text.slice(0, 4000)], { dimensions: embedCtx.dims });
+    const qv = new Float32Array(qvArr);
+    for (const m of memories) {
+      const e = embedCtx.embs.find((x) => x.memory_id === m.id);
+      if (e && e.dims === qv.length && cosine(qv, e.vector) >= DUP_COSINE_THRESHOLD) return true;
+    }
+  } catch {
+    /* 向量失败降级到文本层已做的判断 */
+  }
+  return false;
 }
 
 // 单进程内按会话持有整理锁：自动整理（每轮 done 后）与手动整理共用，
@@ -145,11 +227,49 @@ export async function consolidateSession(sessionId: number): Promise<number> {
     }
 
     const entryId = addEntry("chat", conversation.slice(0, 8000), sessionId);
+
+    // 去重语境：库里 active 记忆 + 本会话待确认候选（跨会话 staging 隔离，不去重其它会话候选）
+    const existingMemories = listMemories({ limit: 500 });
+    const pendingCandidates = listCandidates({ sessionId, status: "pending", limit: 200 });
+    let embedCtx: EmbedCtx = { ready: false };
+    if (embedderReady(settings)) {
+      try {
+        const rt = embedderRuntime(settings);
+        const provider = rt ? resolveEmbedder(settings) : null;
+        const embed = provider?.embed;
+        if (rt && embed) {
+          embedCtx = { ready: true, embed, dims: rt.dimensions, embs: embeddingsFor(rt.model) };
+        }
+      } catch {
+        /* 向量不可用则保持纯文本层 */
+      }
+    }
+
+    const seenInBatch: string[] = [];
     let candidatesAdded = 0;
+    let skippedDuplicates = 0;
     for (const item of parsed.items.slice(0, 12)) {
       if (!item.content?.trim()) continue;
+      const text = item.content.trim();
+      // 显式取代不算重复：extractor 已声明被取代的旧记忆，放手走封口+建边
+      if (item.supersedes) {
+        seenInBatch.push(text);
+        insertCandidate(item, entryId, sessionId);
+        candidatesAdded++;
+        continue;
+      }
+      if (await isNearDuplicate(text, existingMemories, pendingCandidates, seenInBatch, embedCtx)) {
+        skippedDuplicates++;
+        continue;
+      }
+      seenInBatch.push(text);
       insertCandidate(item, entryId, sessionId);
       candidatesAdded++;
+    }
+    if (skippedDuplicates > 0) {
+      console.log(
+        `[consolidate] session ${sessionId}: 跳过 ${skippedDuplicates} 条与已有记忆/候选重复的抽取项`,
+      );
     }
 
     touchSession(sessionId, {

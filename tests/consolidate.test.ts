@@ -3,7 +3,13 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { __resetDbForTests } from "@/lib/db/client";
-import { parseJsonLoose, selectFreshBatch } from "@/lib/memory/consolidate";
+import {
+  DUP_TEXT_THRESHOLD,
+  isTextDuplicate,
+  parseJsonLoose,
+  selectFreshBatch,
+  textSimilarity,
+} from "@/lib/memory/consolidate";
 import {
   addEntry,
   approveCandidate,
@@ -261,5 +267,30 @@ describe("候选暂存与确认（staging）：确认前不碰正式记忆，确
     expect(c.type).toBe("claim");
     expect(c.theme).toBeNull();
     expect(c.importance).toBe(0.5);
+  });
+});
+
+describe("候选提取去重（textSimilarity / isTextDuplicate）", () => {
+  const A = "我在纠结换工作的必要性";
+
+  it("字符 bigram：标点差异的近同句相似度接近 1", () => {
+    expect(textSimilarity(A, "我在纠结换工作的必要性。")).toBeGreaterThan(0.95);
+    expect(textSimilarity(A, "我决定明年换一个行业")).toBeLessThan(DUP_TEXT_THRESHOLD);
+  });
+
+  it("与库里已有 active 记忆近乎同句 → 判重复，不再产生重复候选", () => {
+    expect(isTextDuplicate(A, [], [{ content: "我在纠结换工作的必要性。" }], [])).toBe(true);
+  });
+
+  it("与同批已接受的抽取项近似 → 判重复（同批互斥）", () => {
+    expect(isTextDuplicate(A, ["我在纠结换工作的必要性。"], [], [])).toBe(true);
+  });
+
+  it("与本会话待确认候选近似 → 判重复（多轮反复抽同一主张不再堆积候选卡）", () => {
+    expect(isTextDuplicate(A, [], [], [{ content: "我在纠结换工作的必要性。" }])).toBe(true);
+  });
+
+  it("语义相近但措辞明显不同（演进）不判重复，保留给 supersedes 语义处理", () => {
+    expect(isTextDuplicate("我决定明年换一个行业", [], [{ content: A }], [])).toBe(false);
   });
 });
