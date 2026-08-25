@@ -35,6 +35,7 @@ export function useChatStream(
   const targetContentRef = useRef<string>("");
   const displayedContentRef = useRef<string>("");
   const targetReasoningRef = useRef<string>("");
+  const displayedReasoningRef = useRef<string>("");
   const targetWebSourcesRef = useRef<WebSourceLite[] | undefined>(undefined);
   const targetRetrievedMemoriesRef = useRef<RetrievedMemory[] | undefined>(undefined);
   const targetRetrievedThemesRef = useRef<string[] | undefined>(undefined);
@@ -48,14 +49,16 @@ export function useChatStream(
   const messageIndexToIdRef = useRef<Map<number, number>>(new Map());
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // 打字机缓冲引擎：每 25ms 运行一次，将 targetContentRef 平滑输出到 displayedContentRef
+  // 打字机缓冲引擎：每 25ms 运行一次，将 targetContent 与 targetReasoning 平滑输出到 messages state
   useEffect(() => {
     const interval = setInterval(() => {
       const assistantIdx = activeAssistantIndexRef.current;
       if (assistantIdx === null) return;
 
-      const target = targetContentRef.current;
-      const displayed = displayedContentRef.current;
+      const targetC = targetContentRef.current;
+      const displayedC = displayedContentRef.current;
+      const targetR = targetReasoningRef.current;
+      const displayedR = displayedReasoningRef.current;
 
       // 实时计算思考耗时
       const reasoningStart = reasoningStartTimeRef.current;
@@ -64,40 +67,70 @@ export function useChatStream(
           ? ((reasoningEndTimeRef.current ?? Date.now()) - reasoningStart) / 1000
           : undefined;
 
-      if (displayed.length < target.length) {
-        const lag = target.length - displayed.length;
-        const step = lag > 80 ? 4 : lag > 25 ? 2 : 1;
-        const next = target.slice(0, displayed.length + step);
-        displayedContentRef.current = next;
+      let hasContentChange = false;
+      let nextContent = displayedC;
+      if (displayedC.length < targetC.length) {
+        const lag = targetC.length - displayedC.length;
+        const step = lag > 80 ? 6 : lag > 25 ? 3 : 1;
+        nextContent = targetC.slice(0, displayedC.length + step);
+        displayedContentRef.current = nextContent;
+        hasContentChange = true;
+      }
 
-        setMessages((prev) => {
-          if (!prev[assistantIdx]) return prev;
-          const updated = [...prev];
-          updated[assistantIdx] = {
-            ...updated[assistantIdx],
-            content: next,
-            reasoning_content: targetReasoningRef.current || updated[assistantIdx].reasoning_content,
-            reasoning_duration: currentReasoningDuration ?? updated[assistantIdx].reasoning_duration,
-            webSources: targetWebSourcesRef.current ?? updated[assistantIdx].webSources,
-            retrievedMemories: targetRetrievedMemoriesRef.current ?? updated[assistantIdx].retrievedMemories,
-            retrievedThemes: targetRetrievedThemesRef.current ?? updated[assistantIdx].retrievedThemes,
-            toolTraces: targetToolTracesRef.current ?? updated[assistantIdx].toolTraces,
-            deepThinking: targetDeepThinkingRef.current ?? updated[assistantIdx].deepThinking,
-          };
-          return updated;
-        });
+      let hasReasoningChange = false;
+      let nextReasoning = displayedR;
+      if (displayedR.length < targetR.length) {
+        const lag = targetR.length - displayedR.length;
+        const step = lag > 120 ? 12 : lag > 40 ? 6 : 2;
+        nextReasoning = targetR.slice(0, displayedR.length + step);
+        displayedReasoningRef.current = nextReasoning;
+        hasReasoningChange = true;
+      }
 
-        // 仅在用户未主动向上滑动查看历史时，跟随滚到底部
-        if (!scroll.userScrolledUpRef.current && scroll.scrollContainerRef.current) {
-          scroll.scrollContainerRef.current.scrollTop = scroll.scrollContainerRef.current.scrollHeight;
-        }
-      } else {
-        if (isStreamDoneReceivedRef.current) {
-          setStreaming(false);
-          setStreamingStatus("");
-          activeAssistantIndexRef.current = null;
-          isStreamDoneReceivedRef.current = false;
-        }
+      setMessages((prev) => {
+        if (!prev[assistantIdx]) return prev;
+        const currentMsg = prev[assistantIdx];
+
+        const needsUpdate =
+          hasContentChange ||
+          hasReasoningChange ||
+          currentMsg.reasoning_duration !== currentReasoningDuration ||
+          currentMsg.toolTraces !== targetToolTracesRef.current ||
+          currentMsg.retrievedMemories !== targetRetrievedMemoriesRef.current ||
+          currentMsg.webSources !== targetWebSourcesRef.current ||
+          currentMsg.deepThinking !== targetDeepThinkingRef.current;
+
+        if (!needsUpdate) return prev;
+
+        const updated = [...prev];
+        updated[assistantIdx] = {
+          ...currentMsg,
+          content: nextContent,
+          reasoning_content: nextReasoning || targetR || currentMsg.reasoning_content,
+          reasoning_duration: currentReasoningDuration ?? currentMsg.reasoning_duration,
+          webSources: targetWebSourcesRef.current ?? currentMsg.webSources,
+          retrievedMemories: targetRetrievedMemoriesRef.current ?? currentMsg.retrievedMemories,
+          retrievedThemes: targetRetrievedThemesRef.current ?? currentMsg.retrievedThemes,
+          toolTraces: targetToolTracesRef.current ?? currentMsg.toolTraces,
+          deepThinking: targetDeepThinkingRef.current ?? currentMsg.deepThinking,
+        };
+        return updated;
+      });
+
+      // 仅在用户未主动向上滑动查看历史时，跟随滚到底部
+      if ((hasContentChange || hasReasoningChange) && !scroll.userScrolledUpRef.current && scroll.scrollContainerRef.current) {
+        scroll.scrollContainerRef.current.scrollTop = scroll.scrollContainerRef.current.scrollHeight;
+      }
+
+      if (
+        isStreamDoneReceivedRef.current &&
+        displayedContentRef.current.length >= targetContentRef.current.length &&
+        displayedReasoningRef.current.length >= targetReasoningRef.current.length
+      ) {
+        setStreaming(false);
+        setStreamingStatus("");
+        activeAssistantIndexRef.current = null;
+        isStreamDoneReceivedRef.current = false;
       }
     }, 25);
 
@@ -151,7 +184,11 @@ export function useChatStream(
                   reasoningStartTimeRef.current = Date.now();
                 }
                 targetReasoningRef.current += data.text;
-                setStreamingStatus("正在深度思考与对照...");
+                setStreamingStatus(
+                  targetDeepThinkingRef.current
+                    ? "正在深度思考与推演..."
+                    : "正在思考与对照...",
+                );
                 setExpandedReasoningMap((prev) => ({ ...prev, [assistantMsgIndex]: true }));
               } else if (data.type === "content") {
                 if (reasoningStartTimeRef.current !== null && reasoningEndTimeRef.current === null) {
@@ -195,6 +232,7 @@ export function useChatStream(
     (assistantMsgIndex: number, initialStatus: string): AbortController => {
       displayedContentRef.current = "";
       targetContentRef.current = "";
+      displayedReasoningRef.current = "";
       targetReasoningRef.current = "";
       targetWebSourcesRef.current = undefined;
       targetRetrievedMemoriesRef.current = undefined;
@@ -217,7 +255,7 @@ export function useChatStream(
         setStreamingElapsed((Date.now() - startTime) / 1000);
       }, 100);
 
-      // 思考卡片在流式生成中默认展开
+      // 思考卡片在流式生成中默认展开让用户实时看到思维链
       setExpandedReasoningMap((prev) => ({ ...prev, [assistantMsgIndex]: true }));
 
       // 中断可能存在的旧连接
@@ -251,6 +289,7 @@ export function useChatStream(
     isStreamDoneReceivedRef.current = false;
     displayedContentRef.current = "";
     targetContentRef.current = "";
+    displayedReasoningRef.current = "";
     targetReasoningRef.current = "";
     targetWebSourcesRef.current = undefined;
     targetRetrievedMemoriesRef.current = undefined;
@@ -302,8 +341,10 @@ export function useChatStream(
 
         const targetIdx = assistantIdx >= 0 ? assistantIdx : 0;
         const existingContent = initialMessages?.[targetIdx]?.content || "";
+        const existingReasoning = initialMessages?.[targetIdx]?.reasoning_content || "";
         // 展示基线保留已持久化的内容，但打字机目标从空白开始重放本次 SSE 全量事件
         displayedContentRef.current = existingContent;
+        displayedReasoningRef.current = existingReasoning;
         targetContentRef.current = "";
         targetReasoningRef.current = "";
         targetDeepThinkingRef.current = undefined;

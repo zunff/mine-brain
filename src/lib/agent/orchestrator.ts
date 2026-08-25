@@ -241,7 +241,7 @@ export async function* runChat(
     type: "status",
     text: opts.deepThinking
       ? "多维认知探针已就绪，正在进行深度推演..."
-      : "正在深度思考与对照...",
+      : "正在思考与对照...",
   };
 
   const serializedMemories =
