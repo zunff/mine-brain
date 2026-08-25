@@ -46,7 +46,7 @@ const TYPE_ORDER: { type: MemoryType | "all"; label: string; icon: React.Element
   { type: "value", label: "核心价值", icon: Compass },
   { type: "claim", label: "主张信念", icon: Sparkles },
   { type: "decision", label: "重大决定", icon: Check },
-  { type: "question", label: "开放回路", icon: FileQuestion },
+  { type: "question", label: "未解心结", icon: FileQuestion },
   { type: "insight", label: "核心洞察", icon: Lightbulb },
   { type: "pattern", label: "思维模式", icon: History },
 ];
@@ -271,7 +271,7 @@ export default function MemoriesPage() {
               <span>结构化记忆库</span>
             </h1>
             <p className="mt-1 text-xs text-muted">
-              记录价值观、关键决定、认知演变与开放回路 · 被推翻的主张永不隐去
+              记录价值观、关键决定、认知演变与没解开的心结 · 被推翻的主张永不隐去
             </p>
           </div>
           <Button
@@ -299,7 +299,7 @@ export default function MemoriesPage() {
             accent
           />
           <StatCard
-            label="开放回路 (待解决)"
+            label="未解心结 (待解决)"
             value={stats.openLoops}
             icon={FileQuestion}
             highlight={stats.openLoops > 0}
@@ -461,7 +461,7 @@ export default function MemoriesPage() {
           <DialogHeader>
             <DialogTitle>新建记忆条目</DialogTitle>
             <DialogDescription>
-              将你的核心主张、重大抉择或开放回路结构化沉淀至大脑中
+              将你的核心主张、重大抉择或没解开的心结结构化沉淀至大脑中
             </DialogDescription>
           </DialogHeader>
 

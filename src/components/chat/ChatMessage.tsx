@@ -27,9 +27,9 @@ import { parseMsgImages } from "./types";
 
 const RESEARCH_TOOL_LABEL: Record<string, string> = {
   memory_search: "记忆检索",
-  memory_tension: "矛盾对立面",
-  memory_timeline: "立场时间线",
-  open_loop_search: "未解纠结",
+  memory_tension: "过去的对立观点",
+  memory_timeline: "立场变化",
+  open_loop_search: "没解开的心结",
   web_search: "外部检索",
   web_fetch: "深读网页",
 };
@@ -420,13 +420,13 @@ export default function ChatMessage({
                                 )}
                               >
                                 {isTension
-                                  ? "⚠️ 历史张力"
+                                  ? "⚠️ 打对台的过去想法"
                                   : isOpenLoop
-                                  ? "🔄 未解纠结"
+                                  ? "🔄 反复绕不开的事"
                                   : isConstitution
-                                  ? "📜 核心宪章"
+                                  ? "📜 我的底色"
                                   : isTimeline
-                                  ? "⏳ 时间线演化"
+                                  ? "⏳ 想法的演变"
                                   : "🏷️ 相关记忆"}
                               </span>
                               {m.theme && (

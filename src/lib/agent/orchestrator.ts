@@ -73,7 +73,7 @@ export async function* runChat(
   const settings = getAiSettings();
   const vectorBoostById = await computeVectorBoostMap(settings, trimmed);
 
-  // 会话内去重：本会话已引用过的记忆 id 不再重复注入（宪章除外，见 retrieve.ts）。
+  // 会话内去重：本会话已引用过的记忆 id 不再重复注入（我的底色除外，见 retrieve.ts）。
   // 扫整个会话而非最近 12 条——历史引用与模型上下文是两个不同的问题。
   const citedIds = new Set(listReferencedMemoryIds(session.id));
 
@@ -90,7 +90,7 @@ export async function* runChat(
   const memCount = bundle.constitution.length + bundle.related.length;
   const memTrace: RetrievalTrace = {
     id: "trace_mem",
-    name: "核心宪章与相关记忆探查",
+    name: "我的底色与相关记忆",
     description: `检索到 ${bundle.constitution.length} 条长期画像/价值观与 ${bundle.related.length} 条相关主张`,
     count: memCount,
     details: [...bundle.constitution, ...bundle.related]
@@ -104,7 +104,7 @@ export async function* runChat(
   if (bundle.tensions.length > 0) {
     const tensionTrace: RetrievalTrace = {
       id: "trace_tension",
-      name: "历史矛盾与对立面比对",
+      name: "打对台的过去想法",
       description: `沿矛盾与推翻边线索交叉比对出 ${bundle.tensions.length} 条对立观点`,
       count: bundle.tensions.length,
       details: bundle.tensions.map((m) => m.title || m.content.slice(0, 24)),
@@ -118,8 +118,8 @@ export async function* runChat(
   if (timelineCount > 0) {
     const timelineTrace: RetrievalTrace = {
       id: "trace_timeline",
-      name: "信念演进与未解纠结溯源",
-      description: `回溯了 ${bundle.openLoops.length} 条反复出现的纠结回路与 ${bundle.timeline?.length ?? 0} 条时间线主张`,
+      name: "想法演进与没解开的心结",
+      description: `回溯了 ${bundle.openLoops.length} 条反复绕不开的事与 ${bundle.timeline?.length ?? 0} 条立场变迁`,
       count: timelineCount,
       details: [...bundle.openLoops, ...(bundle.timeline ?? [])]
         .slice(0, 5)
@@ -129,7 +129,7 @@ export async function* runChat(
     yield { type: "trace", trace: timelineTrace };
   }
 
-  // 记忆检索摘要：向前端透出本次调取的记忆切面（张力、开放回路、时间线、相关记忆与宪章）
+  // 记忆检索摘要：向前端透出本次调取的记忆切面（对立观点、未解心结、想法演变、相关记忆与我的底色）
   const memorySummaries: RetrievedMemorySummary[] = [];
   const seenIds = new Set<number>();
   for (const m of bundle.tensions.slice(0, 3)) {

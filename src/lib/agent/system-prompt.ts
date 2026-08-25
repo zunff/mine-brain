@@ -90,13 +90,13 @@ export function buildSystemPrompt(
 
   if (bundle.constitution.length > 0) {
     sections.push(
-      `【关于用户 · 宪章】\n${bundle.constitution.map(fmtMemory).join("\n")}`,
+      `【关于用户 · 我的底色】\n${bundle.constitution.map(fmtMemory).join("\n")}`,
     );
   }
 
   if (bundle.timeline && bundle.timeline.length > 0) {
     sections.push(
-      `【时间线心路脉络 · 过去态度演进】\n以下是按时间先后回溯的相关记录，用于观察想法如何一步步演变：\n${bundle.timeline.map(fmtMemory).join("\n")}`,
+      `【想法的演变 · 过去的立场变化】\n以下是按时间先后回溯的相关记录，用于观察想法如何一步步演变：\n${bundle.timeline.map(fmtMemory).join("\n")}`,
     );
   }
 
@@ -108,13 +108,13 @@ export function buildSystemPrompt(
 
   if (bundle.tensions.length > 0) {
     sections.push(
-      `【张力素材 · 用户自己过去的对立面】\n以下记忆与上面的记录存在矛盾或已被推翻。当用户的当前表述靠近其中一方时，明确指出另一方存在。\n${bundle.tensions.map(fmtMemory).join("\n")}`,
+      `【过去的对立观点 · 不随波逐流的那一面】\n以下记忆与上面的记录存在矛盾或已被推翻。当用户的当前表述靠近其中一方时，明确指出另一方存在。\n${bundle.tensions.map(fmtMemory).join("\n")}`,
     );
   }
 
   if (bundle.openLoops.length > 0) {
     sections.push(
-      `【未解的开放回路 · 反复出现的纠结】\n这些是用户一直没解开的问题，适合在贴近时轻轻拉回：\n${bundle.openLoops.map(fmtMemory).join("\n")}`,
+      `【一直没解开的心结 · 那个反复出现的纠结】\n这些是用户一直绕不开的问题，适合在贴近时轻轻拉回：\n${bundle.openLoops.map(fmtMemory).join("\n")}`,
     );
   }
 

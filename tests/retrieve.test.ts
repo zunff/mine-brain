@@ -83,7 +83,7 @@ describe("buildContextBundle", () => {
     return { profileId, valueId, jobClaimId };
   }
 
-  it("宪章切片始终包含 active 的 profile 与 value", () => {
+  it("我的底色切片始终包含 active 的 profile 与 value", () => {
     seed();
     const bundle = buildContextBundle("随便聊聊");
     expect(bundle.constitution.map((m) => m.type)).toContain("profile");
@@ -145,7 +145,7 @@ describe("buildContextBundle", () => {
     );
   });
 
-  it("被推翻的 value 不再进宪章，新价值取代之", () => {
+  it("被推翻的 value 不再进底色，新价值取代之", () => {
     seed();
     const newValueId = insertMemory({
       type: "value",
@@ -287,7 +287,7 @@ describe("buildContextBundle — 深度思考模式", () => {
     expect(bundle.timeline!.length).toBe(2);
   });
 
-  it("excludeIds 排除本会话已引用记忆，宪章不受影响", () => {
+  it("excludeIds 排除本会话已引用记忆，底色不受影响", () => {
     // 已引用的立场 + 它的对立面 + 沉睡 60 天的旧纠结
     const cited = careerClaim({ importance: 0.9 });
     const foe = careerClaim({ importance: 0.1, theme: null });
@@ -317,7 +317,7 @@ describe("buildContextBundle — 深度思考模式", () => {
     expect(first.openLoops.map((m) => m.id)).toContain(loop);
     expect(first.timeline!.map((m) => m.id)).toContain(cited);
 
-    // 第二轮：把「已引用」的三个排除，宪章仍在
+    // 第二轮：把「已引用」的三个排除，底色仍在
     const second = buildContextBundle(msg, {
       deepThinking: true,
       excludeIds: [cited, foe, loop],

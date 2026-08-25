@@ -15,7 +15,7 @@ import { vectorBoost } from "./vector";
  */
 
 export interface ContextBundle {
-  /** 宪章切面：关于我 + 价值观，几乎每次都带 */
+  /** 我的底色切面：关于我 + 价值观，几乎每次都带 */
   constitution: MemoryRow[];
   /** 与本次话题相关的记忆 */
   related: MemoryRow[];

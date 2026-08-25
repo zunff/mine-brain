@@ -130,7 +130,7 @@ export const MEMORY_TYPE_LABELS: Record<MemoryType, string> = {
   value: "价值观",
   claim: "主张",
   decision: "决定",
-  question: "开放回路",
+  question: "未解心结",
   insight: "洞察",
   pattern: "行为模式",
 };

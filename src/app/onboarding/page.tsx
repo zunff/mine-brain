@@ -523,12 +523,12 @@ useEffect(() => {
 
           {/* 4. 反复出现的纠结 */}
           <CardShell
-            title="反复出现的纠结与张力"
+            title="反复出现的纠结"
             icon={Scale}
             filled={tensions.some((t) => t.name.trim())}
           >
             <p className="text-xs text-muted leading-relaxed mb-3">
-              系统会把每条张力作为「开放回路」长期追踪，在对话逼近时轻轻拉回对照。
+              把你反复绕不开的纠结记下来，之后对话中贴近时轻轻拉回对照。
             </p>
             <div className="space-y-3">
               {tensions.map((t, i) => (
