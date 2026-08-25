@@ -58,12 +58,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: SSH 到服务器执行部署脚本
-        uses: appleboy/ssh-action@v1.2.2
-        with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          port: ${{ vars.SSH_PORT || 22 }}
-          script: |
-            cd /opt/mine-brain
-            bash deploy.sh
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_PORT: ${{ vars.SSH_PORT || 22 }}
+        run: |
+          # 用 runner 自带的 openssh 客户端直连，避免第三方 action 自下载二进制的网络依赖
+          mkdir -p ~/.ssh && echo "$SSH_KEY" > ~/.ssh/id_rsa && chmod 600 ~/.ssh/id_rsa
+          ssh \
+            -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            -o ConnectTimeout=30 \
+            -o ServerAliveInterval=15 \
+            -o ServerAliveCountMax=2 \
+            -i ~/.ssh/id_rsa \
+            -p "$SSH_PORT" \
+            "$SSH_USER@$SSH_HOST" \
+            'cd /opt/mine-brain && bash deploy.sh'
