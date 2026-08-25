@@ -1,6 +1,6 @@
 "use client";
 
-import React, { createContext, useContext, useEffect, useState } from "react";
+import React, { createContext, useContext, useEffect, useSyncExternalStore } from "react";
 
 export type ThemeId = "obsidian" | "parchment" | "forest" | "roast" | "eink";
 
@@ -86,22 +86,37 @@ const ThemeContext = createContext<ThemeContextType>({
   themes: THEMES,
 });
 
-export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const [theme, setThemeState] = useState<ThemeId>(() => {
-    if (typeof window !== "undefined") {
-      try {
-        const saved = localStorage.getItem("mb_theme") as ThemeId;
-        if (saved && THEMES.some((t) => t.id === saved)) {
-          return saved;
-        }
-      } catch {
-        // ignore
-      }
-    }
-    return "obsidian";
-  });
+function subscribeTheme(callback: () => void) {
+  if (typeof window === "undefined") return () => {};
+  window.addEventListener("storage", callback);
+  window.addEventListener("mb_theme_change", callback);
+  return () => {
+    window.removeEventListener("storage", callback);
+    window.removeEventListener("mb_theme_change", callback);
+  };
+}
 
-  // 保证水合后以及主题切换时 document.documentElement 上的 data-theme 永远与状态同步
+function getThemeSnapshot(): ThemeId {
+  if (typeof window === "undefined") return "obsidian";
+  try {
+    const saved = localStorage.getItem("mb_theme") as ThemeId;
+    if (saved && THEMES.some((t) => t.id === saved)) {
+      return saved;
+    }
+  } catch {
+    // ignore
+  }
+  return "obsidian";
+}
+
+function getServerSnapshot(): ThemeId {
+  return "obsidian";
+}
+
+export function ThemeProvider({ children }: { children: React.ReactNode }) {
+  const theme = useSyncExternalStore(subscribeTheme, getThemeSnapshot, getServerSnapshot);
+
+  // 保证主题切换时 document.documentElement 上的 data-theme 永远与状态同步
   useEffect(() => {
     try {
       document.documentElement.setAttribute("data-theme", theme);
@@ -111,10 +126,10 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   }, [theme]);
 
   const setTheme = (nextTheme: ThemeId) => {
-    setThemeState(nextTheme);
     try {
       localStorage.setItem("mb_theme", nextTheme);
       document.documentElement.setAttribute("data-theme", nextTheme);
+      window.dispatchEvent(new Event("mb_theme_change"));
     } catch {
       // ignore
     }

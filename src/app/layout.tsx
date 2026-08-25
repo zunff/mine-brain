@@ -27,11 +27,13 @@ export default function RootLayout({
 }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="zh-CN" suppressHydrationWarning>
-      <body className="antialiased" suppressHydrationWarning>
+      <head>
         <script
           dangerouslySetInnerHTML={{ __html: themeInitScript }}
           suppressHydrationWarning
         />
+      </head>
+      <body className="antialiased" suppressHydrationWarning>
         <Providers>
           <div className="flex h-dvh flex-col-reverse md:flex-row overflow-hidden bg-background text-foreground">
             <SideNav />

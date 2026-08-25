@@ -661,79 +661,40 @@ function MemoryCard({
   return (
     <div
       className={cn(
-        "group rounded-xl border p-4 transition-all",
+        "group rounded-xl border p-4 transition-all space-y-2.5",
         superseded || archived
           ? "border-border/60 bg-surface/40 opacity-70"
           : "border-border bg-surface hover:border-accent/30 hover:shadow-xs"
       )}
     >
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0 flex-1">
-          {/* Metadata badges row */}
-          <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted">
-            <Badge variant="accent" className="font-normal text-[10px] py-0 px-2">
-              {MEMORY_TYPE_LABELS[m.type] ?? m.type}
+      {/* 顶部元数据徽章与操作按钮栏：左右分布 */}
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted min-w-0 flex-1">
+          <Badge variant="accent" className="font-normal text-[10px] py-0 px-2">
+            {MEMORY_TYPE_LABELS[m.type] ?? m.type}
+          </Badge>
+
+          {m.theme && (
+            <Badge variant="outline" className="text-[10px] py-0 px-2 font-normal">
+              {THEME_LABELS[m.theme as keyof typeof THEME_LABELS] ?? m.theme}
             </Badge>
-
-            {m.theme && (
-              <Badge variant="outline" className="text-[10px] py-0 px-2 font-normal">
-                {THEME_LABELS[m.theme as keyof typeof THEME_LABELS] ?? m.theme}
-              </Badge>
-            )}
-
-            <span className="text-muted/80 flex items-center gap-1">
-              <Calendar className="h-3 w-3 inline" />
-              {(m.valid_from ?? m.created_at).slice(0, 10)}
-            </span>
-
-            {superseded && (
-              <Badge variant="danger" className="text-[10px] py-0 px-1.5 font-normal">
-                已被推翻
-              </Badge>
-            )}
-
-            {archived && (
-              <Badge variant="outline" className="text-[10px] py-0 px-1.5 font-normal text-muted">
-                已归档
-              </Badge>
-            )}
-          </div>
-
-          {/* Title if present */}
-          {m.title && (
-            <h4
-              className={cn(
-                "mt-2 text-sm font-semibold text-foreground tracking-tight",
-                superseded && "line-through decoration-muted text-muted"
-              )}
-            >
-              {m.title}
-            </h4>
           )}
 
-          {/* Content */}
-          <p
-            className={cn(
-              "mt-1.5 whitespace-pre-wrap text-xs sm:text-[13px] leading-relaxed text-foreground/90",
-              superseded && "text-muted line-through decoration-muted/60"
-            )}
-          >
-            {m.content}
-          </p>
+          <span className="text-muted/80 flex items-center gap-1">
+            <Calendar className="h-3 w-3 inline" />
+            {(m.valid_from ?? m.created_at).slice(0, 10)}
+          </span>
 
-          {/* Tags */}
-          {(m.tags?.length ?? 0) > 0 && (
-            <div className="mt-3 flex flex-wrap items-center gap-1.5">
-              <Tag className="h-3 w-3 text-muted/60" />
-              {m.tags!.map((t) => (
-                <span
-                  key={t}
-                  className="rounded-md border border-border bg-surface-2 px-2 py-0.5 text-[10px] text-muted font-mono"
-                >
-                  #{t}
-                </span>
-              ))}
-            </div>
+          {superseded && (
+            <Badge variant="danger" className="text-[10px] py-0 px-1.5 font-normal">
+              已被推翻
+            </Badge>
+          )}
+
+          {archived && (
+            <Badge variant="outline" className="text-[10px] py-0 px-1.5 font-normal text-muted">
+              已归档
+            </Badge>
           )}
         </div>
 
@@ -763,6 +724,46 @@ function MemoryCard({
           </Button>
         </div>
       </div>
+
+      {/* 主体内容：占满卡片整宽 */}
+      <div>
+        {/* Title if present */}
+        {m.title && (
+          <h4
+            className={cn(
+              "text-sm font-semibold text-foreground tracking-tight",
+              superseded && "line-through decoration-muted text-muted"
+            )}
+          >
+            {m.title}
+          </h4>
+        )}
+
+        {/* Content */}
+        <p
+          className={cn(
+            "mt-1.5 whitespace-pre-wrap text-xs sm:text-[13px] leading-relaxed text-foreground/90",
+            superseded && "text-muted line-through decoration-muted/60"
+          )}
+        >
+          {m.content}
+        </p>
+      </div>
+
+      {/* Tags */}
+      {(m.tags?.length ?? 0) > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+          <Tag className="h-3 w-3 text-muted/60" />
+          {m.tags!.map((t) => (
+            <span
+              key={t}
+              className="rounded-md border border-border bg-surface-2 px-2 py-0.5 text-[10px] text-muted font-mono"
+            >
+              #{t}
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

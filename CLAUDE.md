@@ -33,3 +33,13 @@ UI 改动必须用 playwright-cli 打开页面截图验证后再报告完成（�
 - `src/lib/memory/` 记忆仓库、检索、整理
 - `src/lib/agent/` 思考伙伴人格提示词与对话编排
 - `data/` 运行时数据库与导出（已 gitignore，绝不提交）
+
+<!-- BEGIN:nextjs-agent-rules -->
+
+# This is NOT the Next.js you know
+
+This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` (resolved from this file's directory; in monorepos the `next` package may not be visible from the repo root) before writing any code. Heed deprecation notices.
+
+This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
+
+<!-- END:nextjs-agent-rules -->
