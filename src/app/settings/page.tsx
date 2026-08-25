@@ -36,7 +36,8 @@ import { assertOk, cn } from "@/lib/utils";
 interface RoleView {
   model?: string;
   baseUrl?: string;
-  apiKeyMasked?: string;
+  /** GET 返回的是掩码后的 key（真实 key 从不回传前端） */
+  apiKey?: string;
   dimensions?: number;
 }
 
@@ -74,6 +75,27 @@ const ROLE_META: Array<{ key: RoleKey; label: string; hint: string }> = [
 const EMPTY_ROLE = { model: "", baseUrl: "", apiKey: "" };
 const EMPTY_EMBED = { model: "", baseUrl: "", apiKey: "", dimensions: "" };
 
+/** 可独立保存/测试的配置卡片。 */
+type SettingScope = "global" | RoleKey | "embedder" | "searcher";
+
+const SCOPE_LABEL: Record<SettingScope, string> = {
+  global: "全局 Provider",
+  thinker: "thinker",
+  extractor: "extractor",
+  embedder: "embedder",
+  searcher: "searcher",
+};
+
+interface TestResult {
+  ok?: boolean;
+  skipped?: boolean;
+  model?: string;
+  dimensions?: number;
+  baseUrl?: string;
+  reply?: string;
+  error?: string;
+}
+
 interface OnboardingView {
   hasProfile: boolean;
   onboarding: { status: string; completedAt?: string; skippedAt?: string; memoryCount?: number };
@@ -91,8 +113,13 @@ export default function SettingsPage() {
   });
   const [embed, setEmbed] = useState({ ...EMPTY_EMBED });
   const [search, setSearch] = useState({ baseUrl: "", apiKey: "" });
-  const [saving, setSaving] = useState(false);
-  const [testing, setTesting] = useState(false);
+  const [savingScope, setSavingScope] = useState<SettingScope | null>(null);
+  const [testingScope, setTestingScope] = useState<SettingScope | null>(null);
+  // 「恢复继承全局」是草稿动作：清空输入 + 标记 apiKey 该清除，真正删除在下次保存时带 __CLEAR__ 提交
+  const [roleClearKey, setRoleClearKey] = useState<{ thinker: boolean; extractor: boolean }>({
+    thinker: false,
+    extractor: false,
+  });
   const [importing, setImporting] = useState(false);
   const [reindexing, setReindexing] = useState(false);
   const [reindexConfirmOpen, setReindexConfirmOpen] = useState(false);
@@ -113,9 +140,20 @@ export default function SettingsPage() {
   function applySettings(d: SettingsView) {
     setView(d);
     setG({ baseUrl: d.baseUrl, apiKey: "", model: d.model });
+    // 已存的覆盖值载入输入框而非只做 placeholder：空字段在保存端=清除，
+    // 若只放 placeholder 则「只改全局后保存」会把已配的覆盖字段发成空串清掉。
+    // 现在输入框所见即所存，留空=继承全局=该字段无覆盖。
     setRoles({
-      thinker: { ...EMPTY_ROLE },
-      extractor: { ...EMPTY_ROLE },
+      thinker: {
+        model: d.roles?.thinker?.model ?? "",
+        baseUrl: d.roles?.thinker?.baseUrl ?? "",
+        apiKey: "",
+      },
+      extractor: {
+        model: d.roles?.extractor?.model ?? "",
+        baseUrl: d.roles?.extractor?.baseUrl ?? "",
+        apiKey: "",
+      },
     });
     setEmbed({
       model: d.roles?.embedder?.model ?? "",
@@ -123,7 +161,68 @@ export default function SettingsPage() {
       apiKey: "",
       dimensions: d.roles?.embedder?.dimensions?.toString() ?? "",
     });
-    setSearch({ baseUrl: "", apiKey: "" });
+    setSearch({ baseUrl: d.roles?.searcher?.baseUrl ?? "", apiKey: "" });
+  }
+
+  /**
+   * 保存后仅把「刚保存的卡片」对账到服务端返回值，其余卡片的未保存草稿保留输入。
+   * 不能整体 applySettings——那会把用户还在编辑的其他卡片输入清回服务端值。
+   */
+  function applyScoped(d: SettingsView, scope: SettingScope) {
+    setView(d);
+    if (scope === "global") {
+      setG({ baseUrl: d.baseUrl, apiKey: "", model: d.model });
+    } else if (scope === "thinker" || scope === "extractor") {
+      const o = d.roles?.[scope];
+      setRoles((v) => ({
+        ...v,
+        [scope]: { model: o?.model ?? "", baseUrl: o?.baseUrl ?? "", apiKey: "" },
+      }));
+    } else if (scope === "embedder") {
+      const o = d.roles?.embedder;
+      setEmbed({
+        model: o?.model ?? "",
+        baseUrl: o?.baseUrl ?? "",
+        apiKey: "",
+        dimensions: o?.dimensions?.toString() ?? "",
+      });
+    } else {
+      const o = d.roles?.searcher;
+      setSearch({ baseUrl: o?.baseUrl ?? "", apiKey: "" });
+    }
+  }
+
+  /** 卡片是否有未保存改动：仅当输入与「服务端现值」不一致才算脏；apiKey 输入框空=未改动。 */
+  function roleDirty(key: RoleKey): boolean {
+    const o = view?.roles?.[key];
+    return (
+      roles[key].model !== (o?.model ?? "") ||
+      roles[key].baseUrl !== (o?.baseUrl ?? "") ||
+      roles[key].apiKey.trim() !== ""
+    );
+  }
+  function dirtyGlobal(): boolean {
+    return (
+      g.baseUrl !== (view?.baseUrl ?? "") ||
+      g.model !== (view?.model ?? "") ||
+      g.apiKey.trim() !== ""
+    );
+  }
+  function dirtyEmbed(): boolean {
+    const o = view?.roles?.embedder;
+    return (
+      embed.model !== (o?.model ?? "") ||
+      embed.baseUrl !== (o?.baseUrl ?? "") ||
+      embed.apiKey.trim() !== "" ||
+      embed.dimensions !== (o?.dimensions?.toString() ?? "")
+    );
+  }
+  function dirtySearch(): boolean {
+    const o = view?.roles?.searcher;
+    return (
+      search.baseUrl !== (o?.baseUrl ?? "") ||
+      search.apiKey.trim() !== ""
+    );
   }
 
   async function load() {
@@ -192,55 +291,98 @@ export default function SettingsPage() {
     };
   }, []);
 
-  async function save() {
-    setSaving(true);
+  /** 保存单个卡片：载荷只含该卡片的字段，其余配置不被触碰（删除卡片级误清的根）。 */
+  async function saveScope(scope: SettingScope) {
+    setSavingScope(scope);
     try {
+      const body: Record<string, unknown> =
+        scope === "global"
+          ? { baseUrl: g.baseUrl, apiKey: g.apiKey, model: g.model }
+          : scope === "thinker" || scope === "extractor"
+            ? {
+                roles: {
+                  [scope]: {
+                    model: roles[scope].model,
+                    baseUrl: roles[scope].baseUrl,
+                    apiKey: roleClearKey[scope] ? "__CLEAR__" : roles[scope].apiKey,
+                  },
+                },
+              }
+            : scope === "embedder"
+              ? {
+                  roles: {
+                    embedder: {
+                      model: embed.model,
+                      baseUrl: embed.baseUrl,
+                      apiKey: embed.apiKey,
+                      dimensions: embed.dimensions,
+                    },
+                  },
+                }
+              : { roles: { searcher: { baseUrl: search.baseUrl, apiKey: search.apiKey } } };
       await assertOk(
         await fetch("/api/settings", {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            ...g,
-            roles: {
-              ...roles,
-              embedder: {
-                model: embed.model,
-                baseUrl: embed.baseUrl,
-                apiKey: embed.apiKey,
-                dimensions: embed.dimensions,
-              },
-              searcher: {
-                model: "",
-                baseUrl: search.baseUrl,
-                apiKey: search.apiKey,
-              },
-            },
-          }),
+          body: JSON.stringify(body),
         }),
       );
-      showToast("设置已保存并生效");
-      await load();
+      if (scope === "thinker" || scope === "extractor") {
+        setRoleClearKey((v) => ({ ...v, [scope]: false }));
+      }
+      showToast(`${SCOPE_LABEL[scope]} 已保存`);
+      const res = await fetch("/api/settings");
+      if (res.ok) applyScoped((await res.json()) as SettingsView, scope);
     } catch (e) {
-      showToast(e instanceof Error ? e.message : "保存设置失败", false);
+      showToast(e instanceof Error ? e.message : "保存失败", false);
     } finally {
-      setSaving(false);
+      setSavingScope(null);
     }
   }
 
-  async function testConnection() {
-    setTesting(true);
+  /** 按卡片测试「当前草稿」：把整页编辑态作为 draft 提交，服务端按保存语义合并后探针。 */
+  async function testScope(scope: SettingScope) {
+    setTestingScope(scope);
     try {
-      const res = await fetch("/api/settings/test", { method: "POST" });
-      const d = (await res.json()) as { ok: boolean; reply?: string; error?: string };
-      if (d.ok) {
-        showToast(`AI 连接成功：${d.reply ?? "正常响应"}`);
-      } else {
+      const body = {
+        target: scope,
+        draft: {
+          baseUrl: g.baseUrl,
+          apiKey: g.apiKey,
+          model: g.model,
+          roles: {
+            thinker: { ...roles.thinker, apiKey: roleClearKey.thinker ? "__CLEAR__" : roles.thinker.apiKey },
+            extractor: { ...roles.extractor, apiKey: roleClearKey.extractor ? "__CLEAR__" : roles.extractor.apiKey },
+            embedder: embed,
+            searcher: search,
+          },
+        },
+      };
+      const res = await fetch("/api/settings/test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const d = (await res.json()) as TestResult;
+      if (d.skipped) {
+        showToast(d.error ?? "未配置，跳过");
+        return;
+      }
+      if (!d.ok) {
         showToast(`连接失败：${d.error ?? res.status}`, false);
+        return;
+      }
+      if (scope === "embedder") {
+        showToast(`embedder 已就绪 · ${d.model ?? "?"}${d.dimensions ? `（${d.dimensions} 维）` : ""}`);
+      } else if (scope === "searcher") {
+        showToast(`searcher 可连通 · ${d.baseUrl ?? "?"}`);
+      } else {
+        showToast(`${SCOPE_LABEL[scope]} 连接成功 · ${d.model ?? "?"}${d.reply ? `：${d.reply}` : ""}`);
       }
     } catch (e) {
-      showToast(e instanceof Error ? e.message : "测试连接出错", false);
+      showToast(e instanceof Error ? e.message : "测试出错", false);
     } finally {
-      setTesting(false);
+      setTestingScope(null);
     }
   }
 
@@ -259,21 +401,12 @@ export default function SettingsPage() {
     }
   }
 
-  async function resetRole(role: RoleKey) {
+  /** 「恢复继承全局」改为草稿动作：清空输入 + 标记 apiKey 待清除，由卡片「保存」真正提交。 */
+  function resetRoleToDraft(role: RoleKey) {
     setRoles((prev) => ({ ...prev, [role]: { ...EMPTY_ROLE } }));
-    try {
-      await assertOk(
-        await fetch("/api/settings", {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ roles: { [role]: { model: "", baseUrl: "", apiKey: "__CLEAR__" } } }),
-        }),
-      );
-      showToast(`已重置 ${role} 角色为继承全局配置`);
-      load();
-    } catch {
-      showToast("重置失败", false);
-    }
+    setRoleClearKey((prev) => ({ ...prev, [role]: true }));
+    setResetRoleTarget(null);
+    showToast(`已清空 ${role} 覆盖，点击该卡片「保存」后生效`);
   }
 
   function exportData() {
@@ -458,7 +591,16 @@ export default function SettingsPage() {
             兼容任意 OpenAI 兼容协议端点（OpenAI、DeepSeek、Ollama、各类兼容网关等）。
           </p>
 
+          {/* 字段顺序与「按角色细分覆盖」「向量检索」一致：模型 → Base URL → API Key */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <Field label="默认模型" hint="作为所有未指定角色的模型">
+              <input
+                value={g.model}
+                onChange={(e) => setG((v) => ({ ...v, model: e.target.value }))}
+                placeholder="x-preview-f-free"
+                className={inputCls}
+              />
+            </Field>
             <Field label="Base URL" hint="API 地址前缀">
               <input
                 value={g.baseUrl}
@@ -479,14 +621,17 @@ export default function SettingsPage() {
                 className={inputCls}
               />
             </Field>
-            <Field label="默认模型" hint="作为所有未指定角色的模型">
-              <input
-                value={g.model}
-                onChange={(e) => setG((v) => ({ ...v, model: e.target.value }))}
-                placeholder="x-preview-f-free"
-                className={inputCls}
-              />
-            </Field>
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border/60 pt-3">
+            <span className="text-[11px] text-muted">改动后点「保存」，只影响此卡片</span>
+            <SaveTestButtons
+              dirty={dirtyGlobal()}
+              testing={testingScope === "global"}
+              saving={savingScope === "global"}
+              onTest={() => testScope("global")}
+              onSave={() => saveScope("global")}
+            />
           </div>
         </section>
 
@@ -502,7 +647,8 @@ export default function SettingsPage() {
 
           <div className="space-y-3 mt-3">
             {ROLE_META.map(({ key, label, hint }) => {
-              const customModel = view?.roles?.[key]?.model;
+              const override = view?.roles?.[key];
+              const hasOverride = !!(override?.model || override?.baseUrl || override?.apiKey);
               return (
                 <div
                   key={key}
@@ -513,14 +659,9 @@ export default function SettingsPage() {
                       <span className="text-xs font-semibold text-foreground">{label}</span>
                       <p className="mt-0.5 text-[11px] text-muted">{hint}</p>
                     </div>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => setResetRoleTarget(key)}
-                      className="h-6 px-2 text-[11px] text-muted hover:text-accent"
-                    >
-                      恢复继承全局
-                    </Button>
+                    {hasOverride && (
+                      <span className="text-[10px] text-accent shrink-0">已独立配置</span>
+                    )}
                   </div>
 
                   <div className="mt-3 grid grid-cols-1 gap-2.5 sm:grid-cols-3">
@@ -533,7 +674,7 @@ export default function SettingsPage() {
                             [key]: { ...v[key], model: e.target.value },
                           }))
                         }
-                        placeholder={customModel || "继承全局"}
+                        placeholder="留空继承全局"
                         className={inputCls}
                       />
                     </Field>
@@ -546,13 +687,13 @@ export default function SettingsPage() {
                             [key]: { ...v[key], baseUrl: e.target.value },
                           }))
                         }
-                        placeholder={view?.roles?.[key]?.baseUrl || "继承全局"}
+                        placeholder="留空继承全局"
                         className={inputCls}
                       />
                     </Field>
                     <Field
                       label="API Key 覆盖"
-                      hint={view?.roles?.[key]?.apiKeyMasked ? "已自定义" : undefined}
+                      hint={override?.apiKey ? "已自定义，留空不改" : undefined}
                     >
                       <input
                         value={roles[key].apiKey}
@@ -567,6 +708,24 @@ export default function SettingsPage() {
                         className={inputCls}
                       />
                     </Field>
+                  </div>
+
+                  <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-border/60 pt-3">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setResetRoleTarget(key)}
+                      className="h-6 px-2 text-[11px] text-muted hover:text-accent"
+                    >
+                      恢复继承全局
+                    </Button>
+                    <SaveTestButtons
+                      dirty={roleDirty(key)}
+                      testing={testingScope === key}
+                      saving={savingScope === key}
+                      onTest={() => testScope(key)}
+                      onSave={() => saveScope(key)}
+                    />
                   </div>
                 </div>
               );
@@ -613,7 +772,7 @@ export default function SettingsPage() {
                 className={inputCls}
               />
             </Field>
-            <Field label="API Key" hint={view?.roles?.embedder?.apiKeyMasked ? "已配置" : "百炼/兼容Key"}>
+            <Field label="API Key" hint={view?.roles?.embedder?.apiKey ? "已配置，留空不改" : "百炼/兼容Key"}>
               <input
                 value={embed.apiKey}
                 onChange={(e) => setEmbed((v) => ({ ...v, apiKey: e.target.value }))}
@@ -650,16 +809,25 @@ export default function SettingsPage() {
                 <span>未初始化嵌入配置</span>
               )}
             </div>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setReindexConfirmOpen(true)}
-              disabled={reindexing || !view?.embedder?.ready}
-              className="gap-1.5 h-8 text-xs shrink-0"
-            >
-              <RefreshCw className={cn("h-3.5 w-3.5", reindexing && "animate-spin")} />
-              <span>{reindexing ? "正在重新嵌入..." : "全量重新向量化"}</span>
-            </Button>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setReindexConfirmOpen(true)}
+                disabled={reindexing || !view?.embedder?.ready}
+                className="gap-1.5 h-8 text-xs shrink-0"
+              >
+                <RefreshCw className={cn("h-3.5 w-3.5", reindexing && "animate-spin")} />
+                <span>{reindexing ? "正在重新嵌入..." : "全量重新向量化"}</span>
+              </Button>
+              <SaveTestButtons
+                dirty={dirtyEmbed()}
+                testing={testingScope === "embedder"}
+                saving={savingScope === "embedder"}
+                onTest={() => testScope("embedder")}
+                onSave={() => saveScope("embedder")}
+              />
+            </div>
           </div>
         </section>
 
@@ -690,7 +858,7 @@ export default function SettingsPage() {
                 className={inputCls}
               />
             </Field>
-            <Field label="API Key" hint={view?.roles?.searcher?.apiKeyMasked ? "已配置" : "exa.ai 申请"}>
+            <Field label="API Key" hint={view?.roles?.searcher?.apiKey ? "已配置，留空不改" : "exa.ai 申请"}>
               <input
                 value={search.apiKey}
                 onChange={(e) => setSearch((v) => ({ ...v, apiKey: e.target.value }))}
@@ -701,40 +869,27 @@ export default function SettingsPage() {
             </Field>
           </div>
 
-          <div className="mt-3 border-t border-border/60 pt-3 text-[11px] text-muted">
-            {view?.searcher ? (
-              <span>
-                当前设定：<span className="text-accent font-medium">{view.searcher.baseUrl}</span>
-                {" · "}
-                聊天输入框已出现「联网」开关
-              </span>
-            ) : (
-              <span>未配置 Key——配置并保存后，聊天输入框才会出现「联网」开关</span>
-            )}
+          <div className="mt-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-t border-border/60 pt-3 text-[11px] text-muted">
+            <span>
+              {view?.searcher ? (
+                <span>
+                  当前设定：<span className="text-accent font-medium">{view.searcher.baseUrl}</span>
+                  {" · "}
+                  聊天输入框已出现「联网」开关
+                </span>
+              ) : (
+                <span>未配置 Key——配置并保存后，聊天输入框才会出现「联网」开关</span>
+              )}
+            </span>
+            <SaveTestButtons
+              dirty={dirtySearch()}
+              testing={testingScope === "searcher"}
+              saving={savingScope === "searcher"}
+              onTest={() => testScope("searcher")}
+              onSave={() => saveScope("searcher")}
+            />
           </div>
         </section>
-
-        {/* Actions Row */}
-        <div className="mt-6 flex flex-wrap items-center gap-3">
-          <Button
-            variant="primary"
-            onClick={save}
-            disabled={saving}
-            className="px-6 h-9 font-medium"
-          >
-            {saving ? "正在保存..." : "保存所有配置"}
-          </Button>
-
-          <Button
-            variant="outline"
-            onClick={testConnection}
-            disabled={testing}
-            className="h-9 px-4 gap-1.5"
-          >
-            <Zap className="h-3.5 w-3.5 text-accent" />
-            <span>{testing ? "测试中..." : "测试 AI 连接"}</span>
-          </Button>
-        </div>
 
         {/* 5. Data Sovereignty & Export */}
         <section className="mt-8 rounded-xl border border-border bg-surface p-4 sm:p-5">
@@ -855,7 +1010,8 @@ export default function SettingsPage() {
           <DialogHeader>
             <DialogTitle>恢复继承全局配置？</DialogTitle>
             <DialogDescription className="text-xs pt-1 text-muted">
-              确定要清空「{resetRoleTarget}」的独立模型与 API 覆盖配置吗？重置后该角色将自动继承全局 Provider。
+              将清空「{resetRoleTarget}」的独立模型、Base URL 与 API Key 覆盖（输入框置空），
+              点击该卡片「保存」后生效，届时该角色自动继承全局 Provider。
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -867,7 +1023,7 @@ export default function SettingsPage() {
               size="sm"
               onClick={() => {
                 if (resetRoleTarget) {
-                  resetRole(resetRoleTarget);
+                  resetRoleToDraft(resetRoleTarget);
                   setResetRoleTarget(null);
                 }
               }}
@@ -877,6 +1033,44 @@ export default function SettingsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+    </div>
+  );
+}
+
+function SaveTestButtons({
+  dirty,
+  testing,
+  saving,
+  onTest,
+  onSave,
+}: {
+  dirty: boolean;
+  testing: boolean;
+  saving: boolean;
+  onTest: () => void;
+  onSave: () => void;
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={onTest}
+        disabled={testing}
+        className="h-7 px-2.5 text-xs gap-1"
+      >
+        <Zap className="h-3 w-3 text-accent" />
+        <span>{testing ? "测试中..." : "测试连接"}</span>
+      </Button>
+      <Button
+        variant={dirty ? "primary" : "outline"}
+        size="sm"
+        onClick={onSave}
+        disabled={saving}
+        className="h-7 px-3 text-xs font-medium"
+      >
+        {saving ? "保存中..." : "保存"}
+      </Button>
     </div>
   );
 }

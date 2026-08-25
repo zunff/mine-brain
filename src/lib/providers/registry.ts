@@ -100,3 +100,56 @@ export function defaultAiSettings(): AiSettings {
     model: env.model,
   };
 }
+
+/** /api/settings 保存/测试共用的补丁形态（与 PUT 载荷一致）。 */
+export interface SettingsPatch {
+  baseUrl?: string;
+  apiKey?: string;
+  model?: string;
+  /**
+   * 角色覆盖合并语义：字段空串=清除该字段（回退继承）；apiKey 空串=不改（key 不回传）；
+   * 显式传 "__CLEAR__"=清除 apiKey；dimensions 可由 UI 以字符串（数字串）提交。
+   */
+  roles?: Partial<Record<AgentRole, Partial<RoleOverride> & { dimensions?: number | string }>>;
+}
+
+const SETTING_ROLES: AgentRole[] = ["thinker", "extractor", "embedder", "searcher"];
+
+/**
+ * 把保存/测试载荷应用到当前已存配置，产出「保存后生效」的设置。
+ * 空字段的语义与角色覆盖的清理规则都在这里，是保存与「测草稿」唯一的对账点。
+ */
+export function mergeSettingsPatch(current: AiSettings, patch: SettingsPatch): AiSettings {
+  const roles: AiSettings["roles"] = { ...(current.roles ?? {}) };
+  for (const role of SETTING_ROLES) {
+    const incoming = patch.roles?.[role] as
+      | (Partial<RoleOverride> & { dimensions?: number | string })
+      | undefined;
+    if (!incoming) continue;
+    const dims = incoming.dimensions as number | string | undefined;
+    const merged: RoleOverride = {
+      ...roles[role],
+      ...(incoming.model !== undefined && { model: incoming.model.trim() }),
+      ...(incoming.baseUrl !== undefined && { baseUrl: incoming.baseUrl.trim() }),
+      ...(incoming.apiKey !== undefined &&
+        incoming.apiKey.trim() !== "" && { apiKey: incoming.apiKey.trim() }),
+      ...(dims !== undefined && dims !== "" && { dimensions: Number(dims) }),
+    };
+    for (const k of ["model", "baseUrl", "apiKey"] as const) {
+      if (merged[k] === "") delete merged[k];
+    }
+    if (dims === "" || dims === undefined) delete merged.dimensions;
+    if (incoming.apiKey === "__CLEAR__") delete merged.apiKey;
+    if (Object.keys(merged).length === 0) {
+      delete roles[role];
+    } else {
+      roles[role] = merged;
+    }
+  }
+  return {
+    baseUrl: patch.baseUrl?.trim() || current.baseUrl,
+    apiKey: patch.apiKey?.trim() ? patch.apiKey.trim() : current.apiKey,
+    model: patch.model?.trim() || current.model,
+    roles,
+  };
+}
