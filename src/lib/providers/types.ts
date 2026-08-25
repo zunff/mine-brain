@@ -15,6 +15,12 @@ export interface ChatOptions {
   temperature?: number;
   maxTokens?: number;
   signal?: AbortSignal;
+  /**
+   * 请求模型不要推理（reasoning_effort: none）。
+   * 用于「只需结构化输出、无需思考」的角色（如 extractor）：
+   * 推理模型的思考会无谓消耗完成预算，甚至把正文从 max_tokens 里挤掉造成截断。
+   */
+  suppressReasoning?: boolean;
 }
 
 export interface ChatUsage {

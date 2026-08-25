@@ -137,6 +137,8 @@ export function useChatStream(
       ) {
         setStreaming(false);
         setStreamingStatus("");
+        // 正文输出完全结束：自动收起思考详情折叠盒
+        setExpandedThoughtMap((prev) => ({ ...prev, [assistantIdx]: false }));
         activeAssistantIndexRef.current = null;
         isStreamDoneReceivedRef.current = false;
       }
@@ -289,6 +291,10 @@ export function useChatStream(
 
   /** 一轮结束：停止流式态并清空打字机槽位（409/失败回滚后调用）。 */
   const endStream = useCallback(() => {
+    const activeIdx = activeAssistantIndexRef.current;
+    if (activeIdx !== null) {
+      setExpandedThoughtMap((prev) => ({ ...prev, [activeIdx]: false }));
+    }
     setStreaming(false);
     setStreamingStatus("");
     activeAssistantIndexRef.current = null;

@@ -132,6 +132,9 @@ export class OpenAICompatibleProvider implements AIProvider {
         stream: opts.stream,
         temperature: opts.temperature ?? 0.7,
         max_tokens: opts.maxTokens ?? 4096,
+        // 只需结构化输出的角色可关掉推理：省 token、也避免思考抢占正文预算导致截断。
+        // reasoning_effort 是 OpenAI 兼容协议标准字段；不认识的网关通常静默忽略，不报错。
+        ...(opts.suppressReasoning ? { reasoning_effort: "none" } : {}),
       }),
     });
   }

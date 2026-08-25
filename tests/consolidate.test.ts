@@ -6,12 +6,14 @@ import { __resetDbForTests } from "@/lib/db/client";
 import {
   DUP_TEXT_THRESHOLD,
   isTextDuplicate,
+  isConsolidatedUpToDate,
   parseJsonLoose,
   selectFreshBatch,
   textSimilarity,
 } from "@/lib/memory/consolidate";
 import {
   addEntry,
+  addMessage,
   approveCandidate,
   createSession,
   getCandidate,
@@ -21,6 +23,7 @@ import {
   linksFor,
   listCandidates,
   rejectCandidate,
+  touchSession,
 } from "@/lib/memory/repo";
 import { canSupersede, type ExtractItem, type MessageRow } from "@/lib/memory/types";
 
@@ -290,7 +293,59 @@ describe("候选提取去重（textSimilarity / isTextDuplicate）", () => {
     expect(isTextDuplicate(A, [], [], [{ content: "我在纠结换工作的必要性。" }])).toBe(true);
   });
 
-  it("语义相近但措辞明显不同（演进）不判重复，保留给 supersedes 语义处理", () => {
+  it("语义相近但措辞明显不同（演进）不判死重复，为 supersedes 语义处理保有余地", () => {
     expect(isTextDuplicate("我决定明年换一个行业", [], [{ content: A }], [])).toBe(false);
+  });
+});
+
+describe("isConsolidatedUpToDate「整理已追平」判定（候选落定的完成信号）", () => {
+  let dir: string;
+
+  beforeAll(() => {
+    dir = mkdtempSync(path.join(tmpdir(), "mb-up2date-"));
+    process.env.MINE_BRAIN_DATA_DIR = dir;
+  });
+
+  afterAll(() => {
+    __resetDbForTests();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  beforeEach(() => {
+    __resetDbForTests();
+    const fresh = mkdtempSync(path.join(tmpdir(), "mb-up2datecase-"));
+    process.env.MINE_BRAIN_DATA_DIR = fresh;
+    dir = fresh;
+  });
+
+  it("空会话无从整理 → 视为已追平", () => {
+    const sid = createSession().id;
+    expect(isConsolidatedUpToDate(sid)).toBe(true);
+  });
+
+  it("有消息但 consolidated_upto 未推进到最新 → 未追平（后端仍要补整理）", () => {
+    const sid = createSession().id;
+    addMessage(sid, "user", "我在纠结要不要换工作");
+    addMessage(sid, "assistant", "先把你的硬约束拿来对照");
+    expect(isConsolidatedUpToDate(sid)).toBe(false);
+  });
+
+  it("upto 追到最新消息 id → 追平，此刻拉候选即为该轮最终结果", () => {
+    const sid = createSession().id;
+    const first = addMessage(sid, "user", "我再想了一下，决定不换");
+    const reply = addMessage(sid, "assistant", "这是最终答复");
+    expect(first.id).toBeLessThan(reply.id);
+    touchSession(sid, { consolidatedUpto: reply.id, summary: "s" });
+    expect(isConsolidatedUpToDate(sid)).toBe(true);
+  });
+
+  it("整理完成后又新增消息 → 水位失效重新未追平（需再整理一轮）", () => {
+    const sid = createSession().id;
+    addMessage(sid, "user", "第一轮");
+    const reply1 = addMessage(sid, "assistant", "第一轮回");
+    touchSession(sid, { consolidatedUpto: reply1.id, summary: "s" });
+    expect(isConsolidatedUpToDate(sid)).toBe(true);
+    addMessage(sid, "user", "那要是放弃大厂呢");
+    expect(isConsolidatedUpToDate(sid)).toBe(false);
   });
 });

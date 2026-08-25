@@ -1,12 +1,12 @@
 "use client";
 
+import { useCallback, useEffect, useRef } from "react";
 import {
   Activity,
   Bot,
   Brain,
   Check,
   ChevronDown,
-  ChevronRight,
   Copy,
   Edit3,
   Globe,
@@ -80,6 +80,33 @@ export default function ChatMessage({
   const isDeepThink = msg.deepThinking === true;
   const modeLabel = isResearch ? "深度研究" : isDeepThink ? "深度思考" : null;
 
+  // 思考过程内部滚动容器 Ref 与用户滚动意图标记
+  const reasoningContainerRef = useRef<HTMLDivElement>(null);
+  const userScrolledReasoningRef = useRef(false);
+
+  // 思考过程流式打字输出时：若用户未主动往上翻看，自动跟随最新输出滚到底部
+  useEffect(() => {
+    if (isStreamingCurrent && !msg.content && reasoningContainerRef.current) {
+      if (!userScrolledReasoningRef.current) {
+        reasoningContainerRef.current.scrollTop = reasoningContainerRef.current.scrollHeight;
+      }
+    }
+  }, [msg.reasoning_content, isStreamingCurrent, msg.content]);
+
+  // 思考阶段结束或开始输出正文时，重置手动滚动标记
+  useEffect(() => {
+    if (!isStreamingCurrent || Boolean(msg.content)) {
+      userScrolledReasoningRef.current = false;
+    }
+  }, [isStreamingCurrent, msg.content]);
+
+  const handleReasoningScroll = useCallback(() => {
+    const el = reasoningContainerRef.current;
+    if (!el) return;
+    const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+    userScrolledReasoningRef.current = !isNearBottom;
+  }, []);
+
   // 深度研究的结构化查证步骤
   const hasResearchSteps = isResearch && Boolean(msg.researchSteps && msg.researchSteps.length > 0);
   const visibleTraces = (msg.toolTraces ?? []).filter(
@@ -98,6 +125,17 @@ export default function ChatMessage({
       hasReasoning ||
       hasWebSources ||
       (isStreamingCurrent && (Boolean(streamingStatus) || !msg.content)));
+
+  // 正文气泡展示条件（方案一：出正文前聚焦上方思考盒，消除下方重复的 loading 卡片）：
+  // 1. 用户消息必显
+  // 2. 有正文内容（msg.content）必显
+  // 3. 流式中且无正文：若上方已有思考/探查盒，完全隐藏下方气泡；仅在极简无思考盒时由气泡展示 loading
+  // 4. 静态非流式且无正文（异常/空回复态）：展示重试占位提示
+  const showBubble =
+    isUser ||
+    Boolean(msg.content) ||
+    !isStreamingCurrent ||
+    !hasThoughtBox;
 
   // 生成折叠栏摘要文案
   const renderThoughtHeader = () => {
@@ -237,21 +275,29 @@ export default function ChatMessage({
               </span>
               <div className="flex items-center gap-1 text-[11px] text-muted shrink-0 ml-2">
                 <span>{expandedThought ? "收起详情" : "展开详情"}</span>
-                {expandedThought ? (
-                  <ChevronDown className="h-3.5 w-3.5" />
-                ) : (
-                  <ChevronRight className="h-3.5 w-3.5" />
-                )}
+                <ChevronDown
+                  className={cn(
+                    "h-3.5 w-3.5 transition-transform duration-250 ease-out",
+                    expandedThought ? "rotate-0 text-foreground" : "-rotate-90 text-muted"
+                  )}
+                />
               </div>
             </button>
 
-            {/* 展开后的分段垂直流 */}
-            {expandedThought && (
-              <div
-                id={`thought-body-${idx}`}
-                className="p-3.5 border-t border-border/40 space-y-4 bg-background/20 animate-in fade-in"
-              >
-                {/* 1. 深度研究步骤 / 探查轨迹（时间轴节点流） */}
+            {/* 展开后的分段垂直流（平滑高度与透明度过渡动画） */}
+            <div
+              className="collapse-grid"
+              data-expanded={expandedThought ? "true" : "false"}
+            >
+              <div className="collapse-grid-inner">
+                <div
+                  id={`thought-body-${idx}`}
+                  className={cn(
+                    "p-3.5 border-t border-border/40 space-y-4 bg-background/20 transition-opacity duration-250 ease-out",
+                    expandedThought ? "opacity-100" : "opacity-0"
+                  )}
+                >
+                  {/* 1. 深度研究步骤 / 探查轨迹（时间轴节点流） */}
                 {hasResearchSteps && (
                   <div className="space-y-2">
                     <div className="text-[10.5px] font-semibold text-muted/90 tracking-wide flex items-center gap-1.5">
@@ -491,61 +537,66 @@ export default function ChatMessage({
                       </span>
                     </div>
                     <div
+                      ref={reasoningContainerRef}
+                      onScroll={handleReasoningScroll}
                       id={`reasoning-body-${idx}`}
-                      className="p-3 rounded-lg border border-border/40 font-mono text-[10.5px] text-muted/85 leading-relaxed whitespace-pre-wrap max-h-56 overflow-y-auto bg-surface-2/30 selection:bg-accent/20"
+                      className="p-3 rounded-lg border border-border/30 text-[11.5px] leading-relaxed prose-chat prose-chat-reasoning max-h-56 overflow-y-auto bg-surface-2/20 text-muted selection:bg-accent/20"
                     >
-                      {msg.reasoning_content}
+                      <Markdown content={msg.reasoning_content ?? ""} />
                       {isStreamingCurrent && !msg.content && (
-                        <span className="inline-block h-3 w-1.5 bg-accent ml-0.5 animate-pulse align-middle" />
+                        <span className="inline-block h-3 w-1.5 bg-accent/70 ml-0.5 animate-pulse align-middle" />
                       )}
                     </div>
                   </div>
                 )}
               </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+        {/* Bubble (正文气泡：仅在有正文、无上方思考盒或非流式空态时渲染，避免思考阶段出现上下双 loading 卡片) */}
+        {showBubble ? (
+          <div
+            className={cn(
+              "rounded-2xl px-4 py-3 leading-relaxed transition-all animate-in fade-in duration-200",
+              isUser
+                ? "bg-surface-2 border border-border text-foreground font-normal rounded-tr-xs shadow-xs text-sm"
+                : "bg-surface border border-border/70 text-foreground rounded-tl-xs shadow-xs text-[14.5px] w-full"
+            )}
+          >
+            {isUser ? (
+              <div className="whitespace-pre-wrap">{msg.content}</div>
+            ) : !msg.content && isStreamingCurrent ? (
+              <div className="flex items-center gap-2 text-xs text-muted py-0.5">
+                <div className="flex items-center gap-1">
+                  <span className="h-1.5 w-1.5 rounded-full bg-accent animate-floating-1" />
+                  <span className="h-1.5 w-1.5 rounded-full bg-accent animate-floating-2" />
+                  <span className="h-1.5 w-1.5 rounded-full bg-accent animate-floating-3" />
+                </div>
+                <span className="animate-pulse-subtle font-medium">
+                  {streamingStatus ||
+                    (isResearch
+                      ? "正在深度研究查证与组织回应..."
+                      : isDeepThink
+                        ? "正在深度思考与组织回应..."
+                        : "正在思考与组织回应...")}
+                </span>
+              </div>
+            ) : !msg.content ? (
+              <div className="text-xs text-muted italic py-0.5">
+                这轮没有生成回复，可点击「重新思考」重试
+              </div>
+            ) : (
+              <div className="prose-chat">
+                <Markdown content={msg.content} />
+                {isStreamingCurrent && (
+                  <span className="inline-block h-3.5 w-1.5 bg-accent ml-1 animate-pulse align-middle" />
+                )}
+              </div>
             )}
           </div>
         ) : null}
-
-        {/* Bubble */}
-        <div
-          className={cn(
-            "rounded-2xl px-4 py-3 leading-relaxed transition-all",
-            isUser
-              ? "bg-surface-2 border border-border text-foreground font-normal rounded-tr-xs shadow-xs text-sm"
-              : "bg-surface border border-border/70 text-foreground rounded-tl-xs shadow-xs text-[14.5px] w-full"
-          )}
-        >
-          {isUser ? (
-            <div className="whitespace-pre-wrap">{msg.content}</div>
-          ) : !msg.content && isStreamingCurrent ? (
-            <div className="flex items-center gap-2 text-xs text-muted py-0.5">
-              <div className="flex items-center gap-1">
-                <span className="h-1.5 w-1.5 rounded-full bg-accent animate-floating-1" />
-                <span className="h-1.5 w-1.5 rounded-full bg-accent animate-floating-2" />
-                <span className="h-1.5 w-1.5 rounded-full bg-accent animate-floating-3" />
-              </div>
-              <span className="animate-pulse-subtle font-medium">
-                {streamingStatus ||
-                  (isResearch
-                    ? "正在深度研究查证与组织回应..."
-                    : isDeepThink
-                      ? "正在深度思考与组织回应..."
-                      : "正在思考与组织回应...")}
-              </span>
-            </div>
-          ) : !msg.content ? (
-            <div className="text-xs text-muted italic py-0.5">
-              这轮没有生成回复，可点击「重新思考」重试
-            </div>
-          ) : (
-            <div className="prose-chat">
-              <Markdown content={msg.content} />
-              {isStreamingCurrent && (
-                <span className="inline-block h-3.5 w-1.5 bg-accent ml-1 animate-pulse align-middle" />
-              )}
-            </div>
-          )}
-        </div>
 
         {/* Message footer & actions */}
         <div

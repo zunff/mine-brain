@@ -249,6 +249,14 @@ export function listMessagesAfter(
     .all(sessionId, afterId, limit) as unknown as MessageRow[];
 }
 
+/** 某会话最新一条消息的 id（无消息返回 null）。判断「整理是否已追平」用的水位线。 */
+export function getLatestMessageId(sessionId: number): number | null {
+  const row = getDb()
+    .prepare("SELECT MAX(id) AS m FROM messages WHERE session_id = ?")
+    .get(sessionId) as { m: number | null };
+  return row?.m ?? null;
+}
+
 /* ---------------- entries（不可变原始摄取） ---------------- */
 
 export function addEntry(

@@ -42,15 +42,18 @@ export function useChatSession({
   const loadCandidates = useCallback(async (sessionId: string | null) => {
     if (!sessionId) {
       setCandidates([]);
-      return;
+      return false;
     }
     try {
       const res = await fetch(`/api/candidates?sessionId=${sessionId}`);
       const data = (await res.json()) as { candidates: Candidate[] };
       // 会话守卫：响应返回时若已切走会话，丢弃，避免把旧会话候选贴到新会话
+      const nonEmpty = (data.candidates ?? []).length > 0;
       if (latestSessionRef.current === sessionId) setCandidates(data.candidates ?? []);
+      return nonEmpty;
     } catch {
       if (latestSessionRef.current === sessionId) setCandidates([]);
+      return false;
     }
   }, []);
 
@@ -126,17 +129,52 @@ export function useChatSession({
     setSessions((prev) => prev.map((s) => (s.id === sessionId ? { ...s, title } : s)));
   }, []);
 
-  /** 一轮流式结束（含断点重连）：拉候选。背景整理在 done 之后异步落 staging，
-   * 立即拉通常查不到，延迟补拉一次并带会话守卫。 */
+  /** 轮询一次 /api/consolidate/status，返回「是否已追平」与当前候选。 */
+  const fetchConsolidationStatus = useCallback(
+    async (sessionId: string, signal: AbortSignal) => {
+      const res = await fetch(
+        `/api/consolidate/status?sessionId=${encodeURIComponent(sessionId)}`,
+        { signal },
+      );
+      if (!res.ok) throw new Error(`status ${res.status}`);
+      const data = (await res.json()) as { done?: boolean; candidates?: Candidate[] };
+      return { done: data.done === true, candidates: data.candidates ?? [] };
+    },
+    [],
+  );
+
+  /** 一轮流结束（含断点重连）：等整理追平后取最终候选。
+   * 后台 consolidate 是脱离 SSE 的 fire-and-forget LLM 抽取，耗时不定（1~30 秒）。
+   * 不再用固定时钟猜——轮询 completion 信号：服务端至少在「整理真正追平」(done) 前保持未完成，
+   * 客户端据此每 1.5s 重查一次，抽多快都由其完成的一瞬驱动，杜绝「抽到一半客户端已停止、候选没露头」的竞态。
+   * 上限约 40s；会话切走或请求出错即静默收手。 */
   const onStreamEnd = useCallback(
     (sessionId: string) => {
-      loadCandidates(sessionId);
-      const streamSessionId = sessionId;
-      setTimeout(() => {
-        if (latestSessionRef.current === streamSessionId) loadCandidates(streamSessionId);
-      }, 1800);
+      const controller = new AbortController();
+      const deadline = Date.now() + 40000;
+      (async () => {
+        // 先拉一次已落定候选（抽取快时当即可见）
+        await loadCandidates(sessionId);
+        while (Date.now() < deadline) {
+          if (latestSessionRef.current !== sessionId || controller.signal.aborted) return;
+          let done = false;
+          let cands: Candidate[] = [];
+          try {
+            const s = await fetchConsolidationStatus(sessionId, controller.signal);
+            done = s.done;
+            cands = s.candidates;
+          } catch {
+            return; // 接口异常：维持现状，不反复打扰
+          }
+          if (latestSessionRef.current === sessionId && cands.length > 0) {
+            setCandidates(cands);
+          }
+          if (done) return;
+          await new Promise((r) => setTimeout(r, 1500));
+        }
+      })();
     },
-    [loadCandidates],
+    [loadCandidates, fetchConsolidationStatus, setCandidates],
   );
 
   const submitRename = useCallback(async () => {

@@ -8,6 +8,7 @@ import {
   addEntry,
   embeddingsFor,
   getAiSettings,
+  getLatestMessageId,
   getSession,
   insertCandidate,
   listCandidates,
@@ -186,6 +187,17 @@ export function isConsolidating(sessionId: number): boolean {
   return consolidatingSessions.has(sessionId);
 }
 
+/** 某会话是否已「整理追平」：既没有正在进行的整理，最新消息也已被消化。
+ * 这是候选落定与否的判定信号——为真时拉候选即为该轮整理的最终结果。 */
+export function isConsolidatedUpToDate(sessionId: number): boolean {
+  if (isConsolidating(sessionId)) return false;
+  const s = getSession(sessionId);
+  if (!s) return true;
+  const latest = getLatestMessageId(sessionId);
+  if (latest == null) return true; // 空会话无从整理
+  return s.consolidated_upto >= latest;
+}
+
 /** 抽取并入库。返回新增记忆条数；抛错由调用方兜底。 */
 export async function consolidateSession(sessionId: number): Promise<number> {
   if (consolidatingSessions.has(sessionId)) return 0; // 已有整理在进行：跳过本轮（另一请求会推进 upto）
@@ -213,12 +225,15 @@ export async function consolidateSession(sessionId: number): Promise<number> {
 
     const settings = getAiSettings();
     const provider = resolveProvider(settings, "extractor");
+    // extractor 走非流式 chat 且只需结构化 JSON——对推理模型强制 suppressReasoning（reasoning_effort: none）：
+    // 思考会无谓烧掉完成预算，甚至把正文从 max_tokens 里挤掉，导致 JSON 被掐断成半句——
+    // 这正是「候选记忆几乎不出现」的根因。关掉思考后，正文预算充足，稳定输出完整 JSON。
     const res = await provider.chat(
       [
         { role: "system", content: "你是严谨的记忆整理员，只输出合法 JSON。" },
         { role: "user", content: buildExtractorPrompt(conversation, digest) },
       ],
-      { maxTokens: 4000, temperature: 0.2 },
+      { maxTokens: 4000, temperature: 0.2, suppressReasoning: true },
     );
 
     const parsed = parseJsonLoose<ExtractResult>(res.content);
