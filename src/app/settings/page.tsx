@@ -141,6 +141,17 @@ export default function SettingsPage() {
     }
   }
 
+  /** 仅重取画像状态（从 /onboarding 返回、切回标签页、前进/后退缓存恢复时调用，避免卡片文案停在过期值）。 */
+  async function refreshOnboardingState() {
+    try {
+      const res = await fetch("/api/onboarding");
+      const ob = (await res.json()) as OnboardingView;
+      setOnboarding(ob);
+    } catch {
+      /* 画像状态非关键，失败不影响设置页 */
+    }
+  }
+
   useEffect(() => {
     let active = true;
     (async () => {
@@ -162,6 +173,22 @@ export default function SettingsPage() {
     })();
     return () => {
       active = false;
+    };
+  }, []);
+
+  // 完成画像后从 /onboarding 返回（含浏览器前进/后退缓存恢复）时状态已变：
+  // 监听可见性 / focus / pageshow 及时重取，避免「建立 / 重新建立」文案不一致到要手动刷新。
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === "visible") refreshOnboardingState();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", refreshOnboardingState);
+    window.addEventListener("pageshow", refreshOnboardingState);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", refreshOnboardingState);
+      window.removeEventListener("pageshow", refreshOnboardingState);
     };
   }, []);
 
@@ -298,6 +325,10 @@ export default function SettingsPage() {
     }
   }
 
+  // 已建立基准 = 状态标记完成，或虽无状态但已存在 profile 记忆（状态与记忆漂移时也不误标「首次建立」）
+  const profileBuilt =
+    onboarding !== null && (onboarding.onboarding.status === "completed" || onboarding.hasProfile);
+
   return (
     <div className="h-full overflow-y-auto bg-background">
       {/* Toast Notification */}
@@ -341,27 +372,28 @@ export default function SettingsPage() {
               <div>
                 <h2 className="text-sm font-semibold text-foreground">初始画像</h2>
                 <p className="mt-0.5 text-xs text-muted leading-relaxed">
-                  {onboarding?.onboarding.status === "completed"
-                    ? `已建立基准${typeof onboarding.onboarding.memoryCount === "number" ? `（${onboarding.onboarding.memoryCount} 条记忆）` : ""}。重建不会删除历史：旧画像记忆会归档保留。`
-                    : onboarding?.onboarding.status === "skipped"
-                      ? "之前选择了跳过。可以随时补一份，让对照与矛盾检测更有依据。"
-                      : "尚未建立。填写几条价值观、人生阶段与反复纠结，思考伙伴从第一句对话起就有据可依。"}
+                  {onboarding === null
+                    ? "正在读取画像状态…"
+                    : profileBuilt
+                      ? `已建立基准${typeof onboarding.onboarding.memoryCount === "number" ? `（${onboarding.onboarding.memoryCount} 条记忆）` : ""}。重建不会删除历史：旧画像记忆会归档保留。`
+                      : onboarding.onboarding.status === "skipped"
+                        ? "之前选择了跳过。可以随时补一份，让对照与矛盾检测更有依据。"
+                        : "尚未建立。填写几条价值观、人生阶段与反复纠结，思考伙伴从第一句对话起就有据可依。"}
                 </p>
               </div>
             </div>
             <Button
               variant="outline"
               size="sm"
+              disabled={onboarding === null}
               onClick={() =>
-                router.push(
-                  `/onboarding${onboarding?.onboarding.status === "completed" ? "?force=1" : ""}`,
-                )
+                router.push(`/onboarding${profileBuilt ? "?force=1" : ""}`)
               }
               className="gap-1.5 h-8 text-xs shrink-0"
             >
               <UserRoundPen className="h-3.5 w-3.5 text-accent" />
               <span>
-                {onboarding?.onboarding.status === "completed" ? "重新建立初始画像" : "建立初始画像"}
+                {onboarding === null ? "加载中…" : profileBuilt ? "重新建立初始画像" : "建立初始画像"}
               </span>
             </Button>
           </div>
