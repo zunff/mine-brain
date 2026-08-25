@@ -56,3 +56,6 @@ playwright-screenshots/
 .claude/skills/
 
 .codegraph/
+
+# 依赖本机真实历史数据的浏览器探针（不提交，见 .claude/rules/workflow.md）
+/tests/e2e/local/
