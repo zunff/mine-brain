@@ -33,8 +33,16 @@ const STARTER_PROMPTS = [
 export default function ChatEmptyState({ onPrompt }: ChatEmptyStateProps) {
   return (
     <div className="h-full flex flex-col items-center justify-center max-w-xl mx-auto text-center px-4 py-8">
-      <div className="mb-4">
-        <BrandIcon size={52} className="shadow-lg" />
+      <div className="mb-4 relative flex items-center justify-center">
+        {/* 背景柔和呼吸微光，跟随主题 accent 色彩，完全无硬边缘与多余底框 */}
+        <div
+          className="absolute -inset-2 rounded-full blur-xl opacity-20 bg-accent pointer-events-none"
+          aria-hidden="true"
+        />
+        <BrandIcon
+          size={56}
+          className="relative transition-transform duration-300 hover:scale-105"
+        />
       </div>
       <h3 className="text-lg font-semibold text-foreground tracking-tight">
         你的个人深度思考伙伴

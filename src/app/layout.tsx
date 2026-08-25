@@ -6,6 +6,12 @@ import { Providers } from "@/components/providers";
 export const metadata: Metadata = {
   title: "mine-brain · 思考伙伴",
   description: "个人生活的第二大脑：记住你、对照你、挑战你。",
+  icons: {
+    icon: [
+      { url: "/icon.svg", type: "image/svg+xml" },
+      { url: "/favicon.ico", sizes: "any" },
+    ],
+  },
 };
 
 export const viewport: Viewport = {

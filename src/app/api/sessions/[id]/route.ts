@@ -43,6 +43,8 @@ export async function GET(
     let retrievedThemes: string[] | undefined;
     let toolTraces: unknown[] | undefined;
     let deepThinking: boolean | undefined;
+    let deepResearch: boolean | undefined;
+    let researchSteps: unknown[] | undefined;
     if (m.retrieved_memories) {
       try {
         const parsed = JSON.parse(m.retrieved_memories) as {
@@ -50,11 +52,15 @@ export async function GET(
           memories?: unknown[];
           traces?: unknown[];
           deepThinking?: boolean;
+          deepResearch?: boolean;
+          research?: unknown[];
         };
         if (Array.isArray(parsed.memories)) retrievedMemories = parsed.memories;
         if (Array.isArray(parsed.themes)) retrievedThemes = parsed.themes;
         if (Array.isArray(parsed.traces)) toolTraces = parsed.traces;
         if (typeof parsed.deepThinking === "boolean") deepThinking = parsed.deepThinking;
+        if (typeof parsed.deepResearch === "boolean") deepResearch = parsed.deepResearch;
+        if (Array.isArray(parsed.research)) researchSteps = parsed.research;
       } catch {
         /* ignore parse error */
       }
@@ -71,6 +77,8 @@ export async function GET(
         retrievedThemes && retrievedThemes.length > 0 ? retrievedThemes : undefined,
       toolTraces: toolTraces && toolTraces.length > 0 ? toolTraces : undefined,
       deepThinking,
+      deepResearch,
+      researchSteps: researchSteps && researchSteps.length > 0 ? researchSteps : undefined,
     };
   });
   const isStreaming = isSessionStreaming(sessionId);

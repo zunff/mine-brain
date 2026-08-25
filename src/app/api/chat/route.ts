@@ -18,6 +18,8 @@ interface ChatBody {
   webSearch?: boolean;
   /** 用户开启深度思考：激活多维认知探针与深度推演 */
   deepThinking?: boolean;
+  /** 用户开启深度研究：成文前多角度拆解、逐子问题查证记忆与外部资料、对照反例 */
+  deepResearch?: boolean;
   /** 编辑消息并重发：从该消息 id 起截断旧问答后再启动生成 */
   replaceFromMessageId?: number;
 }
@@ -69,6 +71,7 @@ export async function POST(req: Request): Promise<Response> {
   const result = startChatStream(numericSessionId, rawMessage, images, {
     webSearch: body.webSearch === true,
     deepThinking: body.deepThinking === true,
+    deepResearch: body.deepResearch === true,
     ...(replaceFromMessageId != null ? { replaceFromMessageId } : {}),
   });
   if ("conflict" in result) {

@@ -4,6 +4,8 @@ import { cn } from "@/lib/utils";
 interface BrandIconProps extends React.SVGProps<SVGSVGElement> {
   className?: string;
   size?: number | string;
+  /** 是否带有外圈底盘（默认 false 纯净透明，避免不同背景/主题下出现突兀边框） */
+  withPlate?: boolean;
 }
 
 /**
@@ -17,6 +19,7 @@ interface BrandIconProps extends React.SVGProps<SVGSVGElement> {
 export function BrandIcon({
   className,
   size = 24,
+  withPlate = false,
   ...props
 }: BrandIconProps) {
   return (
@@ -30,38 +33,43 @@ export function BrandIcon({
       {...props}
     >
       <defs>
-        {/* 动态主题渐变：融合主色与微光 */}
-        <linearGradient id="mb-brand-grad-primary" x1="6" y1="8" x2="42" y2="40" gradientUnits="userSpaceOnUse">
+        {/* 动态主题主色渐变：融合主色与明暗层次 */}
+        <linearGradient id="mb-brand-grad-primary" x1="8" y1="10" x2="40" y2="38" gradientUnits="userSpaceOnUse">
           <stop offset="0%" stopColor="var(--accent)" stopOpacity="1" />
           <stop offset="50%" stopColor="var(--accent)" stopOpacity="0.85" />
           <stop offset="100%" stopColor="var(--accent-hover, var(--accent))" stopOpacity="0.95" />
         </linearGradient>
 
-        <linearGradient id="mb-brand-grad-glow" x1="14" y1="12" x2="34" y2="36" gradientUnits="userSpaceOnUse">
-          <stop offset="0%" stopColor="var(--accent)" stopOpacity="0.25" />
-          <stop offset="100%" stopColor="var(--accent)" stopOpacity="0.02" />
-        </linearGradient>
+        {/* 动态微光光晕（平滑径向淡出至 0，无任何硬切边） */}
+        <radialGradient id="mb-brand-grad-glow" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stopColor="var(--accent)" stopOpacity="0.22" />
+          <stop offset="60%" stopColor="var(--accent)" stopOpacity="0.08" />
+          <stop offset="100%" stopColor="var(--accent)" stopOpacity="0" />
+        </radialGradient>
 
+        {/* 仅在 withPlate 为 true 时使用的底盘渐变 */}
         <linearGradient id="mb-brand-grad-surface" x1="0" y1="0" x2="48" y2="48" gradientUnits="userSpaceOnUse">
           <stop offset="0%" stopColor="var(--surface-2)" stopOpacity="0.8" />
           <stop offset="100%" stopColor="var(--surface)" stopOpacity="0.95" />
         </linearGradient>
       </defs>
 
-      {/* 外圈环境柔和底盘 */}
-      <rect
-        x="2"
-        y="2"
-        width="44"
-        height="44"
-        rx="13"
-        fill="url(#mb-brand-grad-surface)"
-        stroke="var(--border)"
-        strokeWidth="1.2"
-      />
+      {/* 可选底盘（默认关闭，保持纯净矢量透底） */}
+      {withPlate && (
+        <rect
+          x="2"
+          y="2"
+          width="44"
+          height="44"
+          rx="13"
+          fill="url(#mb-brand-grad-surface)"
+          stroke="var(--border)"
+          strokeWidth="1.2"
+        />
+      )}
 
       {/* 内部微光光晕 */}
-      <circle cx="24" cy="24" r="16" fill="url(#mb-brand-grad-glow)" />
+      <circle cx="24" cy="24" r="18" fill="url(#mb-brand-grad-glow)" />
 
       {/* 左叶：记忆与过去的沉淀流线 */}
       <path

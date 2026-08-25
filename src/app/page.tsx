@@ -53,6 +53,8 @@ export default function ChatPage() {
 
   // 深度思考开关：激活多维度认知探针与长程推理（localStorage 记住偏好）
   const [deepThinkingOn, setDeepThinkingOn] = useState(false);
+  // 深度研究开关：成文前多角度拆解、逐子问题查证记忆与外部资料、对照反例（localStorage 记住偏好）
+  const [deepResearchOn, setDeepResearchOn] = useState(false);
   // 联网开关：配置了搜索 key 才出现；记住上次的选择（localStorage 只存偏好）
   const [webOn, setWebOn] = useState(false);
   const [webAvailable, setWebAvailable] = useState(false);
@@ -90,6 +92,12 @@ export default function ChatPage() {
         /* ignore */
       }
       try {
+        const savedResearch = localStorage.getItem("mine-brain.research") === "1";
+        if (active) setDeepResearchOn(savedResearch);
+      } catch {
+        /* ignore */
+      }
+      try {
         const res = await fetch("/api/settings");
         const d = (await res.json()) as { searcher?: { ready?: boolean } | null };
         if (active) setWebAvailable(Boolean(d.searcher?.ready));
@@ -119,6 +127,18 @@ export default function ChatPage() {
       const next = !v;
       try {
         localStorage.setItem("mine-brain.deep", next ? "1" : "0");
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
+  };
+
+  const toggleDeepResearch = () => {
+    setDeepResearchOn((v) => {
+      const next = !v;
+      try {
+        localStorage.setItem("mine-brain.research", next ? "1" : "0");
       } catch {
         /* ignore */
       }
@@ -258,6 +278,7 @@ export default function ChatPage() {
           images: userMsg.images,
           webSearch: webOn,
           deepThinking: deepThinkingOn,
+          deepResearch: deepResearchOn,
           ...(replaceMessageId != null ? { replaceFromMessageId: replaceMessageId } : {}),
         }),
       });
@@ -489,14 +510,12 @@ export default function ChatPage() {
                     isStreamingCurrent={isStreamingCurrent}
                     streamingStatus={stream.streamingStatus}
                     streamingElapsed={stream.streamingElapsed}
-                    expandedReasoning={stream.expandedReasoningMap[idx] ?? isStreamingCurrent}
-                    expandedContext={stream.expandedContextMap[idx]}
+                    expandedThought={stream.expandedThoughtMap[idx] ?? isStreamingCurrent}
                     isCopied={copiedId === idx}
                     isEditing={composer.editingIndex === idx}
                     isLast={idx === messages.length - 1}
                     canDeletePair={!stream.streaming && idx > 0 && messages[idx - 1]?.role === "user"}
-                    onToggleReasoning={stream.toggleReasoning}
-                    onToggleContext={stream.toggleContext}
+                    onToggleThought={stream.toggleThought}
                     onCopy={(i) => copyToClipboard(messages[i].content, i)}
                     onRegenerate={regenerate}
                     onEdit={handleEditMessage}
@@ -536,6 +555,7 @@ export default function ChatPage() {
           streaming={stream.streaming}
           webOn={webOn}
           deepThinkingOn={deepThinkingOn}
+          deepResearchOn={deepResearchOn}
           webAvailable={webAvailable}
           inputRef={composer.textareaRef}
           fileRef={composer.fileInputRef}
@@ -547,6 +567,7 @@ export default function ChatPage() {
           onSend={() => send()}
           onToggleWeb={toggleWeb}
           onToggleDeep={toggleDeepThinking}
+          onToggleResearch={toggleDeepResearch}
         />
       </main>
 

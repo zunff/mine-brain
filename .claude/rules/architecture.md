@@ -37,6 +37,17 @@ UI (src/app 页面)
 - 前端身份：每条消息带 `deepThinking` 标记，思考与检索区文案按它区分；UI 开关经 `localStorage` 记住偏好。
 - 上述契约由 tests/retrieve.test.ts「buildContextBundle — 深度思考模式」固化为回归测试，改动必须同步该组测试。
 
+## 深度研究（受控 ReAct，同一管道上的前置查证阶段）
+
+深度研究（`deepResearch`）与深度思考是两个独立维度：前者管「查得扎实」，后者管「想得深」。它不是另一条数据流——仍是 `runChat` 同一条 async-generator 上、最终成文**之前**的一个内部阶段，复用 Provider 抽象与 SSE 协议。
+
+- 受控 ReAct（应用层协议，不依赖原生 tool calling）：固定「主探针」先跑一轮保证主问题覆盖；`Controller`（thinker 角色，低温度短输出）每轮只输出一个 JSON Action，编排器执行只读工具后把压缩 Observation 回传，Controller 决定继续/换向/反例/finish。Controller 的内部思考**不**外发为 reasoning 事件——「思考过程」语义只属于最终回答模型的真实 `reasoning_content`。
+- 工具白名单（全部只读）：`memory_search / memory_tension / memory_timeline / open_loop_search`（复用 buildContextBundle 多信号）+ `web_search / web_fetch`（仅 searcher 配置时）。`web_fetch` 只允许深读自己搜到的 URL（防模型指路任意地址），全研究最多 2 篇。
+- 硬边界：最多 3 轮 Controller 决策、5 次工具调用；**反例查询是硬约束**——全程没查过反例就确定性补跑一条（tests/research.test.ts 固化）；证据账本按 id/url 去重，记忆 ≤30 条、外部 ≤12 条封顶。
+- 降级纪律：searcher 未配置 → web 类动作跳过并记 `degraded:["web"]`，纪要如实标注局限；Controller 失效/输出非法 → 放弃剩余轮次，仍保有「主探针 + 强制反例」两条保底证据；研究阶段任何异常绝不阻塞最终成文。
+- 成文注入：纪要经 `buildResearchBriefSection` 进 system prompt 的【研究纪要】块；外部资料沿用「世界的说法不是用户记忆」铁律。每条消息带 `deepResearch` 标记（context 事件 + retrieved_memories JSON 双通道，重载后标签不丢）。
+- 契约由 tests/research.test.ts 固化：Action 解析容错（围栏/非法动作名/缺字段）、反例硬约束判定、记忆工具边遍历语义、web_fetch 白名单安全。
+
 ## 关键文件
 
 - src/lib/db/client.ts — 连接单例、WAL、迁移入口

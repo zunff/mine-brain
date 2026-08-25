@@ -2,6 +2,7 @@ import type { ContextBundle } from "@/lib/memory/retrieve";
 import type { AssistantPreferences } from "@/lib/memory/onboarding";
 import { MEMORY_TYPE_LABELS, type MemoryRow } from "@/lib/memory/types";
 import type { WebMaterial } from "@/lib/providers/web-search";
+import { buildResearchBriefSection, type ResearchBrief } from "./research";
 
 /**
  * 思考伙伴人格。设计原则见 .claude/rules/project.md：
@@ -42,6 +43,7 @@ export function buildSystemPrompt(
   prefs?: AssistantPreferences,
   web?: WebMaterial | null,
   deepThinking = false,
+  research?: ResearchBrief | null,
 ): string {
   const sections: string[] = [];
 
@@ -118,6 +120,10 @@ export function buildSystemPrompt(
 
   if (web && web.sources.length > 0) {
     sections.push(`【外部资料 · 本轮联网获取，不是用户的记忆】\n${fmtWeb(web)}`);
+  }
+
+  if (research && research.steps.length > 0) {
+    sections.push(buildResearchBriefSection(research));
   }
 
   if (

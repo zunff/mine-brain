@@ -1,5 +1,5 @@
 // 聊天 UI 共享类型与纯函数：页面组件与展示组件之间的类型契约，避免循环引用
-import type { RetrievalTrace } from "@/lib/agent/chat-events";
+import type { ResearchPanelStep, RetrievalTrace } from "@/lib/agent/chat-events";
 
 export interface WebSourceLite {
   title: string;
@@ -33,6 +33,10 @@ export interface Message {
   toolTraces?: RetrievalTrace[];
   /** 是否由深度思考模式生成 */
   deepThinking?: boolean;
+  /** 是否由深度研究模式生成 */
+  deepResearch?: boolean;
+  /** 深度研究面板：工具调用步骤（按时间追加） */
+  researchSteps?: ResearchPanelStep[];
 }
 
 export interface Session {

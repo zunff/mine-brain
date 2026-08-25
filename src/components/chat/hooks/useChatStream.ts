@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { RetrievalTrace } from "@/lib/agent/chat-events";
+import type { ResearchPanelStep, RetrievalTrace } from "@/lib/agent/chat-events";
 import type { Message, RetrievedMemory, WebSourceLite } from "../types";
 
 export interface UseChatStreamHooks {
@@ -27,8 +27,7 @@ export function useChatStream(
   const [streaming, setStreaming] = useState(false);
   const [streamingStatus, setStreamingStatus] = useState("");
   const [streamingElapsed, setStreamingElapsed] = useState(0);
-  const [expandedReasoningMap, setExpandedReasoningMap] = useState<Record<number, boolean>>({});
-  const [expandedContextMap, setExpandedContextMap] = useState<Record<number, boolean>>({});
+  const [expandedThoughtMap, setExpandedThoughtMap] = useState<Record<number, boolean>>({});
 
   // 打字机缓冲引擎 Refs：负责在流式与断点重连时平滑输出字符
   const activeAssistantIndexRef = useRef<number | null>(null);
@@ -41,6 +40,8 @@ export function useChatStream(
   const targetRetrievedThemesRef = useRef<string[] | undefined>(undefined);
   const targetToolTracesRef = useRef<RetrievalTrace[] | undefined>(undefined);
   const targetDeepThinkingRef = useRef<boolean | undefined>(undefined);
+  const targetDeepResearchRef = useRef<boolean | undefined>(undefined);
+  const targetResearchStepsRef = useRef<ResearchPanelStep[]>([]);
   const isStreamDoneReceivedRef = useRef<boolean>(false);
   const activeAbortControllerRef = useRef<AbortController | null>(null);
   const reasoningStartTimeRef = useRef<number | null>(null);
@@ -98,7 +99,9 @@ export function useChatStream(
           currentMsg.toolTraces !== targetToolTracesRef.current ||
           currentMsg.retrievedMemories !== targetRetrievedMemoriesRef.current ||
           currentMsg.webSources !== targetWebSourcesRef.current ||
-          currentMsg.deepThinking !== targetDeepThinkingRef.current;
+          currentMsg.deepThinking !== targetDeepThinkingRef.current ||
+          currentMsg.deepResearch !== targetDeepResearchRef.current ||
+          currentMsg.researchSteps !== targetResearchStepsRef.current;
 
         if (!needsUpdate) return prev;
 
@@ -113,6 +116,11 @@ export function useChatStream(
           retrievedThemes: targetRetrievedThemesRef.current ?? currentMsg.retrievedThemes,
           toolTraces: targetToolTracesRef.current ?? currentMsg.toolTraces,
           deepThinking: targetDeepThinkingRef.current ?? currentMsg.deepThinking,
+          deepResearch: targetDeepResearchRef.current ?? currentMsg.deepResearch,
+          researchSteps:
+            targetResearchStepsRef.current.length > 0
+              ? targetResearchStepsRef.current
+              : undefined,
         };
         return updated;
       });
@@ -174,6 +182,7 @@ export function useChatStream(
                 ];
               } else if (data.type === "context") {
                 targetDeepThinkingRef.current = data.deepThinking === true;
+                targetDeepResearchRef.current = data.deepResearch === true;
                 targetRetrievedThemesRef.current = Array.isArray(data.themes) ? data.themes : [];
                 targetRetrievedMemoriesRef.current = Array.isArray(data.memories) ? data.memories : [];
                 if (Array.isArray(data.traces)) {
@@ -185,11 +194,13 @@ export function useChatStream(
                 }
                 targetReasoningRef.current += data.text;
                 setStreamingStatus(
-                  targetDeepThinkingRef.current
-                    ? "正在深度思考与推演..."
-                    : "正在思考与对照...",
+                  targetDeepResearchRef.current
+                    ? "正在深度研究查证与推演..."
+                    : targetDeepThinkingRef.current
+                      ? "正在深度思考与推演..."
+                      : "正在思考与对照...",
                 );
-                setExpandedReasoningMap((prev) => ({ ...prev, [assistantMsgIndex]: true }));
+                setExpandedThoughtMap((prev) => ({ ...prev, [assistantMsgIndex]: true }));
               } else if (data.type === "content") {
                 if (reasoningStartTimeRef.current !== null && reasoningEndTimeRef.current === null) {
                   reasoningEndTimeRef.current = Date.now();
@@ -198,6 +209,11 @@ export function useChatStream(
                 setStreamingStatus("");
               } else if (data.type === "web") {
                 targetWebSourcesRef.current = Array.isArray(data.sources) ? data.sources : [];
+              } else if (data.type === "research") {
+                targetResearchStepsRef.current = [
+                  ...targetResearchStepsRef.current,
+                  data.step,
+                ];
               } else if (data.type === "meta") {
                 if (data.title && data.title !== "新对话") {
                   hooksRef.current?.onMeta?.(activeSessionId, data.title);
@@ -239,6 +255,8 @@ export function useChatStream(
       targetRetrievedThemesRef.current = undefined;
       targetToolTracesRef.current = undefined;
       targetDeepThinkingRef.current = undefined;
+      targetDeepResearchRef.current = undefined;
+      targetResearchStepsRef.current = [];
       activeAssistantIndexRef.current = assistantMsgIndex;
       isStreamDoneReceivedRef.current = false;
       reasoningStartTimeRef.current = null;
@@ -255,8 +273,8 @@ export function useChatStream(
         setStreamingElapsed((Date.now() - startTime) / 1000);
       }, 100);
 
-      // 思考卡片在流式生成中默认展开让用户实时看到思维链
-      setExpandedReasoningMap((prev) => ({ ...prev, [assistantMsgIndex]: true }));
+      // 前置探查与思考卡片在流式生成中默认展开让用户实时看到查证与思维链
+      setExpandedThoughtMap((prev) => ({ ...prev, [assistantMsgIndex]: true }));
 
       // 中断可能存在的旧连接
       if (activeAbortControllerRef.current) {
@@ -296,6 +314,8 @@ export function useChatStream(
     targetRetrievedThemesRef.current = undefined;
     targetToolTracesRef.current = undefined;
     targetDeepThinkingRef.current = undefined;
+    targetDeepResearchRef.current = undefined;
+    targetResearchStepsRef.current = [];
     messageIndexToIdRef.current.clear();
     if (activeAbortControllerRef.current) {
       activeAbortControllerRef.current.abort();
@@ -323,31 +343,33 @@ export function useChatStream(
           return;
         }
 
-        let assistantIdx = -1;
+        // 目标索引必须同步算出：函数式 setMessages 的 updater 会被 React 推迟到渲染期执行，
+      // 若在 updater 里写索引，重连瞬间同步读到的仍是 -1 → targetIdx 退化为 0，打字机锁死到首条消息。
+      const baseMsgs = initialMessages ?? [];
+      let targetIdx = baseMsgs.length - 1;
+      if (targetIdx < 0 || baseMsgs[targetIdx].role !== "assistant") {
+        targetIdx = baseMsgs.length; // 最后一条不是助手消息：补一条空草稿再接管
         setMessages((prev) => {
           const msgs = initialMessages ?? prev;
-          assistantIdx = msgs.length - 1;
-          if (assistantIdx < 0 || msgs[assistantIdx].role !== "assistant") {
-            const newDraft: Message = {
-              role: "assistant",
-              content: "",
-              created_at: new Date().toISOString(),
-            };
-            assistantIdx = msgs.length;
-            return [...msgs, newDraft];
-          }
-          return msgs;
+          return [
+            ...msgs,
+            { role: "assistant", content: "", created_at: new Date().toISOString() },
+          ];
         });
+      } else {
+        setMessages((prev) => (prev === baseMsgs ? prev : baseMsgs));
+      }
 
-        const targetIdx = assistantIdx >= 0 ? assistantIdx : 0;
-        const existingContent = initialMessages?.[targetIdx]?.content || "";
-        const existingReasoning = initialMessages?.[targetIdx]?.reasoning_content || "";
+      const existingContent = initialMessages?.[targetIdx]?.content || "";
+      const existingReasoning = initialMessages?.[targetIdx]?.reasoning_content || "";
         // 展示基线保留已持久化的内容，但打字机目标从空白开始重放本次 SSE 全量事件
         displayedContentRef.current = existingContent;
         displayedReasoningRef.current = existingReasoning;
         targetContentRef.current = "";
         targetReasoningRef.current = "";
         targetDeepThinkingRef.current = undefined;
+        targetDeepResearchRef.current = undefined;
+        targetResearchStepsRef.current = [];
         targetWebSourcesRef.current = undefined;
         targetRetrievedMemoriesRef.current = undefined;
         targetRetrievedThemesRef.current = undefined;
@@ -368,15 +390,8 @@ export function useChatStream(
     [consumeSseReader, setMessages],
   );
 
-  const toggleReasoning = useCallback((msgIndex: number) => {
-    setExpandedReasoningMap((prev) => ({
-      ...prev,
-      [msgIndex]: !prev[msgIndex],
-    }));
-  }, []);
-
-  const toggleContext = useCallback((msgIndex: number) => {
-    setExpandedContextMap((prev) => ({
+  const toggleThought = useCallback((msgIndex: number) => {
+    setExpandedThoughtMap((prev) => ({
       ...prev,
       [msgIndex]: !prev[msgIndex],
     }));
@@ -394,10 +409,8 @@ export function useChatStream(
     streaming,
     streamingStatus,
     streamingElapsed,
-    expandedReasoningMap,
-    expandedContextMap,
-    toggleReasoning,
-    toggleContext,
+    expandedThoughtMap,
+    toggleThought,
     consumeSseReader,
     reconnectStream,
     beginStream,

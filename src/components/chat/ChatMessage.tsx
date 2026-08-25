@@ -12,6 +12,7 @@ import {
   Globe,
   History,
   Layers,
+  Microscope,
   RotateCcw,
   ShieldAlert,
   Target,
@@ -24,6 +25,15 @@ import { cn } from "@/lib/utils";
 import type { Message } from "./types";
 import { parseMsgImages } from "./types";
 
+const RESEARCH_TOOL_LABEL: Record<string, string> = {
+  memory_search: "记忆检索",
+  memory_tension: "矛盾对立面",
+  memory_timeline: "立场时间线",
+  open_loop_search: "未解纠结",
+  web_search: "外部检索",
+  web_fetch: "深读网页",
+};
+
 interface ChatMessageProps {
   msg: Message;
   idx: number;
@@ -33,15 +43,13 @@ interface ChatMessageProps {
   isStreamingCurrent: boolean;
   streamingStatus: string;
   streamingElapsed: number;
-  expandedReasoning: boolean;
-  expandedContext: boolean;
+  expandedThought: boolean;
   isCopied: boolean;
   isEditing: boolean;
   isLast: boolean;
   /** 该轮可删除（非流式且命中一个用户消息+答复对） */
   canDeletePair: boolean;
-  onToggleReasoning: (idx: number) => void;
-  onToggleContext: (idx: number) => void;
+  onToggleThought: (idx: number) => void;
   onCopy: (idx: number) => void;
   onRegenerate: (idx: number) => void;
   onEdit: (idx: number) => void;
@@ -55,20 +63,85 @@ export default function ChatMessage({
   isStreamingCurrent,
   streamingStatus,
   streamingElapsed,
-  expandedReasoning,
-  expandedContext,
+  expandedThought,
   isCopied,
   isEditing,
   isLast,
   canDeletePair,
-  onToggleReasoning,
-  onToggleContext,
+  onToggleThought,
   onCopy,
   onRegenerate,
   onEdit,
   onDeletePair,
 }: ChatMessageProps) {
   const isUser = msg.role === "user";
+  // 深度研究/深度思考是同族深度工作，标签分开以示区别
+  const isResearch = msg.deepResearch === true;
+  const isDeepThink = msg.deepThinking === true;
+  const modeLabel = isResearch ? "深度研究" : isDeepThink ? "深度思考" : null;
+
+  // 深度研究的结构化查证步骤
+  const hasResearchSteps = isResearch && Boolean(msg.researchSteps && msg.researchSteps.length > 0);
+  const visibleTraces = (msg.toolTraces ?? []).filter(
+    (t) => !hasResearchSteps || !t.id.startsWith("trace_research_"),
+  );
+  const hasRetrievedMemories = Boolean(msg.retrievedMemories && msg.retrievedMemories.length > 0);
+  const hasReasoning = Boolean(msg.reasoning_content);
+  const hasWebSources = !hasResearchSteps && Boolean(msg.webSources && msg.webSources.length > 0);
+
+  // 是否存在前置探查与思考内容（只要有检索、研究步骤、思考过程或正处于流式生成中）
+  const hasThoughtBox =
+    !isUser &&
+    (hasResearchSteps ||
+      visibleTraces.length > 0 ||
+      hasRetrievedMemories ||
+      hasReasoning ||
+      hasWebSources ||
+      (isStreamingCurrent && (Boolean(streamingStatus) || !msg.content)));
+
+  // 生成折叠栏摘要文案
+  const renderThoughtHeader = () => {
+    // 1. 流式中且尚未产出正文：显示实时动态
+    if (isStreamingCurrent && !msg.content) {
+      if (streamingStatus) return streamingStatus;
+      const actionText = hasResearchSteps
+        ? "正在查证与深度思考"
+        : isDeepThink
+        ? "正在深度思考与对照"
+        : "正在思考与对照历史记忆";
+      return `${modeLabel ? `${modeLabel} · ` : ""}${actionText} (${streamingElapsed.toFixed(1)}s)...`;
+    }
+
+    // 2. 完成态 / 静态：组合前缀与统计细节
+    const prefix = isResearch
+      ? "深度研究"
+      : isDeepThink
+      ? "深度思考"
+      : hasReasoning
+      ? "思考过程与依据"
+      : "本轮检索依据";
+
+    const details: string[] = [];
+    if (hasResearchSteps) {
+      details.push(`${msg.researchSteps!.length} 步查证`);
+    }
+    if (hasRetrievedMemories) {
+      details.push(`依据 ${msg.retrievedMemories!.length} 条记忆`);
+    } else if (!hasResearchSteps && visibleTraces.length > 0) {
+      details.push(`${visibleTraces.length} 类检索`);
+    }
+    if (hasWebSources) {
+      details.push(`参考 ${msg.webSources!.length} 条外部资料`);
+    }
+    if (msg.reasoning_duration) {
+      details.push(`耗时 ${msg.reasoning_duration.toFixed(1)}s`);
+    }
+
+    if (details.length === 0) {
+      return prefix;
+    }
+    return `${prefix} · ${details.join(" · ")}`;
+  };
 
   return (
     <div
@@ -113,33 +186,58 @@ export default function ChatMessage({
           ) : null;
         })()}
 
-        {/* Cognitive Probes & Context Box (多维认知探针与历史记忆对照) */}
-        {!isUser && (msg.toolTraces?.length || msg.retrievedMemories?.length) ? (
-          <div className="w-full mb-2.5 rounded-xl border border-border/60 bg-surface/50 overflow-hidden text-xs transition-all shadow-xs">
+        {/* Unified Cognitive Probes, Research Steps & Reasoning Box (统一前置探查与思考折叠盒 · 分段垂直流) */}
+        {hasThoughtBox ? (
+          <div
+            className={cn(
+              "w-full mb-3 rounded-xl border overflow-hidden text-xs transition-all shadow-xs",
+              isStreamingCurrent && !msg.content
+                ? "border-accent/40 bg-surface/80 animate-glow-breathe"
+                : "border-border/60 bg-surface/50"
+            )}
+          >
+            {/* Header / 折叠开关条 */}
             <button
-              onClick={() => onToggleContext(idx)}
-              aria-expanded={expandedContext ? "true" : "false"}
-              aria-controls={`context-body-${idx}`}
+              onClick={() => onToggleThought(idx)}
+              aria-expanded={expandedThought ? "true" : "false"}
+              aria-controls={`thought-body-${idx}`}
               className="w-full px-3.5 py-2 flex items-center justify-between text-muted hover:text-foreground bg-surface-2/30 transition-colors cursor-pointer"
             >
-              <span className="flex items-center gap-1.5 font-medium tracking-wide">
-                <Brain className="h-3.5 w-3.5 text-accent" />
-                <span>
-                  {msg.deepThinking
-                    ? `深度思考 · 依据 ${
-                        msg.retrievedMemories?.length ?? 0
-                      } 条记忆与 ${msg.toolTraces?.length ?? 0} 类检索`
-                    : `本轮检索依据 · ${msg.retrievedMemories?.length ?? 0} 条历史记忆`}
-                </span>
-                {msg.retrievedThemes && msg.retrievedThemes.length > 0 && (
-                  <span className="text-[10px] text-muted font-normal hidden sm:inline ml-1">
-                    · 关联生活域: {msg.retrievedThemes.join(" / ")}
+              <span className="flex items-center gap-2 font-medium tracking-wide min-w-0">
+                {isResearch ? (
+                  <Microscope
+                    className={cn(
+                      "h-3.5 w-3.5 text-accent shrink-0",
+                      isStreamingCurrent && !msg.content && "animate-pulse"
+                    )}
+                  />
+                ) : (
+                  <Brain
+                    className={cn(
+                      "h-3.5 w-3.5 text-accent shrink-0",
+                      isStreamingCurrent && !msg.content && "animate-pulse"
+                    )}
+                  />
+                )}
+                <span className="truncate">{renderThoughtHeader()}</span>
+                {isStreamingCurrent && !msg.content && (
+                  <span className="flex items-center gap-1 ml-0.5 shrink-0">
+                    <span className="h-1.5 w-1.5 rounded-full bg-accent animate-floating-1" />
+                    <span className="h-1.5 w-1.5 rounded-full bg-accent animate-floating-2" />
+                    <span className="h-1.5 w-1.5 rounded-full bg-accent animate-floating-3" />
                   </span>
                 )}
+                {(!isStreamingCurrent || Boolean(msg.content)) &&
+                  msg.retrievedThemes &&
+                  msg.retrievedThemes.length > 0 && (
+                    <span className="text-[10px] text-muted font-normal hidden md:inline ml-1 shrink-0">
+                      · 关联生活域: {msg.retrievedThemes.join(" / ")}
+                    </span>
+                  )}
               </span>
-              <div className="flex items-center gap-1 text-[11px] text-muted">
-                <span>{expandedContext ? "收起探针" : "展开探查明细"}</span>
-                {expandedContext ? (
+              <div className="flex items-center gap-1 text-[11px] text-muted shrink-0 ml-2">
+                <span>{expandedThought ? "收起详情" : "展开详情"}</span>
+                {expandedThought ? (
                   <ChevronDown className="h-3.5 w-3.5" />
                 ) : (
                   <ChevronRight className="h-3.5 w-3.5" />
@@ -147,23 +245,96 @@ export default function ChatMessage({
               </div>
             </button>
 
-            {expandedContext && (
+            {/* 展开后的分段垂直流 */}
+            {expandedThought && (
               <div
-                id={`context-body-${idx}`}
-                className="p-3 border-t border-border/40 space-y-3 bg-background/30 animate-in fade-in"
+                id={`thought-body-${idx}`}
+                className="p-3.5 border-t border-border/40 space-y-4 bg-background/20 animate-in fade-in"
               >
-                {/* 1. 本轮检索依据分类（如果存在 traces） */}
-                {msg.toolTraces && msg.toolTraces.length > 0 && (
+                {/* 1. 深度研究步骤 / 探查轨迹（时间轴节点流） */}
+                {hasResearchSteps && (
+                  <div className="space-y-2">
+                    <div className="text-[10.5px] font-semibold text-muted/90 tracking-wide flex items-center gap-1.5">
+                      <Microscope className="h-3.5 w-3.5 text-accent" />
+                      <span>查证轨迹与探查动作 ({msg.researchSteps!.length} 步)</span>
+                    </div>
+                    <div className="relative pl-3.5 border-l-2 border-border/60 space-y-3 ml-1.5 py-0.5">
+                      {msg.researchSteps!.map((s, i) => {
+                        const hitCount = (s.memoryTitles?.length ?? 0) + (s.web?.length ?? 0);
+                        return (
+                          <div key={i} className="relative text-[11px] space-y-1">
+                            {/* Timeline 节点小圆点 */}
+                            <div className="absolute -left-[19px] top-1.5 h-2 w-2 rounded-full border-2 border-background bg-accent" />
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-surface-2 text-foreground border border-border/60 shadow-2xs">
+                                {RESEARCH_TOOL_LABEL[s.tool] ?? s.tool}
+                              </span>
+                              <span
+                                className="font-medium text-foreground text-[11.5px] truncate max-w-[420px]"
+                                title={s.query}
+                              >
+                                「{s.query}」
+                              </span>
+                              <span className="text-[10px] text-muted font-mono bg-surface-2/60 px-1.5 py-0.5 rounded border border-border/40">
+                                {hitCount} 条命中
+                              </span>
+                            </div>
+                            {s.thinking && (
+                              <p className="text-muted/75 text-[10.5px] leading-relaxed line-clamp-2">
+                                <span className="text-muted font-medium">思路 · </span>
+                                {s.thinking.replace(/^思路[·:：]\s*/, "")}
+                              </p>
+                            )}
+                            {s.note && <p className="text-muted/70 text-[10.5px]">{s.note}</p>}
+                            {s.memoryTitles && s.memoryTitles.length > 0 && (
+                              <div className="flex items-center gap-1 flex-wrap pt-0.5">
+                                <span className="text-[10px] text-muted shrink-0">命中:</span>
+                                {s.memoryTitles.map((t, ti) => (
+                                  <span
+                                    key={ti}
+                                    className="inline-flex items-center px-1.5 py-0.5 rounded bg-accent-soft/40 border border-accent/25 text-foreground text-[10px] truncate max-w-[220px]"
+                                  >
+                                    {t}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                            {s.web && s.web.length > 0 && (
+                              <div className="flex flex-wrap gap-1.5 pt-0.5">
+                                {s.web.map((w, wi) => (
+                                  <a
+                                    key={wi}
+                                    href={w.url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    title={`${w.title} — ${w.url}`}
+                                    className="inline-flex items-center gap-1 max-w-[240px] truncate rounded bg-surface border border-border/80 px-1.5 py-0.5 text-[10px] text-muted hover:text-accent hover:border-accent/40 transition-colors"
+                                  >
+                                    <Globe className="h-2.5 w-2.5 shrink-0 text-accent" />
+                                    <span className="truncate">{w.title}</span>
+                                  </a>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* 2. 本轮检索依据分类（非深度研究时的常规/深度思考检索依据） */}
+                {!hasResearchSteps && visibleTraces.length > 0 && (
                   <div className="space-y-1.5">
-                    <div className="text-[10px] font-semibold text-muted uppercase tracking-wider flex items-center gap-1">
-                      <Activity className="h-3 w-3 text-accent" />
+                    <div className="text-[10.5px] font-semibold text-muted/90 tracking-wide flex items-center gap-1.5">
+                      <Activity className="h-3.5 w-3.5 text-accent" />
                       <span>本轮检索依据</span>
                     </div>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
-                      {msg.toolTraces.map((t) => (
+                      {visibleTraces.map((t) => (
                         <div
                           key={t.id}
-                          className="p-2 rounded-lg border border-border/50 bg-surface/80 flex items-start gap-2 text-[11px]"
+                          className="p-2 rounded-lg border border-border/50 bg-surface/70 flex items-start gap-2 text-[11px]"
                         >
                           <div className="mt-0.5 shrink-0">
                             {t.id === "trace_tension" ? (
@@ -188,6 +359,15 @@ export default function ChatMessage({
                             <p className="text-muted text-[10px] line-clamp-1 mt-0.5">
                               {t.description}
                             </p>
+                            {t.thinking && (
+                              <p
+                                className="text-muted/70 text-[10px] leading-snug line-clamp-2 mt-1 break-words"
+                                title={`模型选定该查询时的思考：${t.thinking}`}
+                              >
+                                <span className="text-muted font-medium">思路 · </span>
+                                {t.thinking.replace(/^思路[·:：]\s*/, "")}
+                              </p>
+                            )}
                           </div>
                         </div>
                       ))}
@@ -195,15 +375,15 @@ export default function ChatMessage({
                   </div>
                 )}
 
-                {/* 2. 具体记忆卡片明细 */}
-                {msg.retrievedMemories && msg.retrievedMemories.length > 0 && (
+                {/* 3. 调取的长期记忆与信念明细 */}
+                {hasRetrievedMemories && (
                   <div className="space-y-1.5">
-                    <div className="text-[10px] font-semibold text-muted uppercase tracking-wider flex items-center gap-1">
-                      <Layers className="h-3 w-3 text-accent" />
-                      <span>调取的长期记忆与信念明细</span>
+                    <div className="text-[10.5px] font-semibold text-muted/90 tracking-wide flex items-center gap-1.5">
+                      <Layers className="h-3.5 w-3.5 text-accent" />
+                      <span>调取的长期记忆与信念明细 ({msg.retrievedMemories!.length} 条)</span>
                     </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
-                      {msg.retrievedMemories.map((m) => {
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {msg.retrievedMemories!.map((m) => {
                         const isTension = m.relation === "tension";
                         const isOpenLoop = m.relation === "openLoop";
                         const isConstitution = m.relation === "constitution";
@@ -212,39 +392,53 @@ export default function ChatMessage({
                           <div
                             key={m.id}
                             className={cn(
-                              "p-2 rounded-lg border text-[11px] transition-colors",
+                              "p-2.5 rounded-lg border text-[11px] transition-all flex flex-col justify-between gap-1",
                               isTension
-                                ? "border-danger/35 bg-danger-soft/25 text-foreground"
+                                ? "border-danger/35 bg-danger-soft/20 hover:border-danger/50"
                                 : isOpenLoop
-                                ? "border-accent/35 bg-accent-soft/25 text-foreground"
+                                ? "border-accent/35 bg-accent-soft/20 hover:border-accent/50"
+                                : isConstitution
+                                ? "border-amber-500/30 bg-amber-500/10 hover:border-amber-500/45"
                                 : isTimeline
-                                ? "border-border/80 bg-surface/90 text-foreground"
-                                : "border-border/60 bg-surface-2/40 text-foreground"
+                                ? "border-border/70 bg-surface/70"
+                                : "border-border/50 bg-surface-2/35"
                             )}
                           >
-                            <div className="flex items-center justify-between gap-1 mb-1">
-                              <Badge
-                                variant={isTension ? "danger" : isConstitution ? "accent" : "outline"}
-                                className="text-[9px] py-0 px-1 font-medium"
+                            <div className="flex items-center justify-between gap-1.5">
+                              <span
+                                className={cn(
+                                  "text-[9.5px] px-1.5 py-0.5 rounded font-medium inline-flex items-center gap-1",
+                                  isTension
+                                    ? "bg-danger/15 text-danger font-semibold"
+                                    : isOpenLoop
+                                    ? "bg-accent/15 text-accent font-semibold"
+                                    : isConstitution
+                                    ? "bg-amber-500/15 text-amber-600 dark:text-amber-400 font-semibold"
+                                    : isTimeline
+                                    ? "bg-surface-2 text-foreground/80"
+                                    : "bg-surface-2 text-muted"
+                                )}
                               >
                                 {isTension
                                   ? "⚠️ 历史张力"
                                   : isOpenLoop
                                   ? "🔄 未解纠结"
-                                  : isTimeline
-                                  ? "⏳ 时间线演化"
                                   : isConstitution
                                   ? "📜 核心宪章"
+                                  : isTimeline
+                                  ? "⏳ 时间线演化"
                                   : "🏷️ 相关记忆"}
-                              </Badge>
+                              </span>
                               {m.theme && (
-                                <span className="text-[10px] text-muted font-mono">
+                                <span className="text-[9.5px] text-muted/70 font-mono">
                                   {m.theme}
                                 </span>
                               )}
                             </div>
-                            <div className="font-medium text-foreground line-clamp-1">{m.title}</div>
-                            <p className="text-muted text-[10px] line-clamp-2 mt-0.5 leading-relaxed">
+                            <div className="font-medium text-foreground text-[11.5px] line-clamp-1 mt-0.5">
+                              {m.title}
+                            </div>
+                            <p className="text-muted/80 text-[10.5px] line-clamp-2 leading-relaxed">
                               {m.content}
                             </p>
                           </div>
@@ -253,100 +447,64 @@ export default function ChatMessage({
                     </div>
                   </div>
                 )}
+
+                {/* 4. 外部参考资料（仅常规联网问答时） */}
+                {hasWebSources && (
+                  <div className="space-y-1.5">
+                    <div className="text-[10.5px] font-semibold text-muted/90 tracking-wide flex items-center gap-1.5">
+                      <Globe className="h-3.5 w-3.5 text-accent" />
+                      <span>
+                        参考外部资料 ({msg.webSources!.length} 条 · 仅为世界信息，不是你的记忆)
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {msg.webSources!.map((s, i) => (
+                        <a
+                          key={i}
+                          href={s.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title={`${s.title} — ${s.url}`}
+                          className="inline-flex items-center gap-1 max-w-[240px] truncate rounded bg-surface border border-border/80 px-2 py-1 text-[10.5px] text-muted hover:text-accent hover:border-accent/40 transition-colors"
+                        >
+                          <Globe className="h-2.5 w-2.5 shrink-0 text-accent" />
+                          <span className="truncate">
+                            {s.publishedDate ? `${s.publishedDate.slice(0, 10)} · ` : ""}
+                            {s.title}
+                          </span>
+                        </a>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* 5. 思考推导过程 */}
+                {hasReasoning && (
+                  <div className="space-y-1.5">
+                    <div className="text-[10.5px] font-semibold text-muted/90 tracking-wide flex items-center gap-1.5">
+                      <Brain className="h-3.5 w-3.5 text-accent" />
+                      <span>
+                        模型思考推导过程
+                        {msg.reasoning_duration
+                          ? ` · 耗时 ${msg.reasoning_duration.toFixed(1)}s`
+                          : ""}
+                      </span>
+                    </div>
+                    <div
+                      id={`reasoning-body-${idx}`}
+                      className="p-3 rounded-lg border border-border/40 font-mono text-[10.5px] text-muted/85 leading-relaxed whitespace-pre-wrap max-h-56 overflow-y-auto bg-surface-2/30 selection:bg-accent/20"
+                    >
+                      {msg.reasoning_content}
+                      {isStreamingCurrent && !msg.content && (
+                        <span className="inline-block h-3 w-1.5 bg-accent ml-0.5 animate-pulse align-middle" />
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>
         ) : null}
-
-        {/* Reasoning Box (Thinker step with timing & floating animation) */}
-        {!isUser && msg.reasoning_content && (
-          <div
-            className={cn(
-              "w-full mb-3 rounded-xl border overflow-hidden text-xs transition-all",
-              isStreamingCurrent && !msg.content
-                ? "border-accent/40 bg-surface/80 shadow-xs animate-glow-breathe"
-                : "border-border/60 bg-surface/60"
-            )}
-          >
-            <button
-              onClick={() => onToggleReasoning(idx)}
-              aria-expanded={expandedReasoning ? "true" : "false"}
-              aria-controls={`reasoning-body-${idx}`}
-              className="w-full px-3.5 py-2 flex items-center justify-between text-muted hover:text-foreground bg-surface-2/40 transition-colors cursor-pointer"
-            >
-              <span className="flex items-center gap-2 font-medium tracking-wide">
-                <Brain
-                  className={cn(
-                    "h-3.5 w-3.5 text-accent",
-                    isStreamingCurrent && !msg.content && "animate-pulse"
-                  )}
-                />
-                <span>
-                  {isStreamingCurrent && !msg.content
-                    ? `${msg.deepThinking ? "深度" : ""}对照与思考中 (${streamingElapsed.toFixed(1)}s)...`
-                    : `${msg.deepThinking ? "深度思考过程" : "思考过程"}${
-                        msg.reasoning_duration
-                          ? ` · 耗时 ${msg.reasoning_duration.toFixed(1)}s`
-                          : ""
-                      }`}
-                </span>
-                {isStreamingCurrent && !msg.content && (
-                  <span className="flex items-center gap-1 ml-0.5">
-                    <span className="h-1.5 w-1.5 rounded-full bg-accent animate-floating-1" />
-                    <span className="h-1.5 w-1.5 rounded-full bg-accent animate-floating-2" />
-                    <span className="h-1.5 w-1.5 rounded-full bg-accent animate-floating-3" />
-                  </span>
-                )}
-              </span>
-              <div className="flex items-center gap-1 text-[11px] text-muted">
-                <span>
-                  {expandedReasoning ? "收起思考" : "展开思考"}
-                </span>
-                {expandedReasoning ? (
-                  <ChevronDown className="h-3.5 w-3.5" />
-                ) : (
-                  <ChevronRight className="h-3.5 w-3.5" />
-                )}
-              </div>
-            </button>
-            {expandedReasoning && (
-              <div
-                id={`reasoning-body-${idx}`}
-                className="p-3.5 border-t border-border/40 font-mono text-[11px] text-muted leading-relaxed whitespace-pre-wrap max-h-72 overflow-y-auto bg-background/30"
-              >
-                {msg.reasoning_content}
-                {isStreamingCurrent && !msg.content && (
-                  <span className="inline-block h-3.5 w-1.5 bg-accent ml-0.5 animate-pulse align-middle" />
-                )}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Web Sources (本轮联网参考，带来源与时间) */}
-        {!isUser && msg.webSources && msg.webSources.length > 0 && (
-          <div className="w-full mb-2 rounded-xl border border-border/60 bg-surface-2/40 px-3 py-2">
-            <div className="flex items-center gap-1.5 text-[10px] text-muted mb-1.5">
-              <Globe className="h-3 w-3 text-accent shrink-0" />
-              <span>参考了 {msg.webSources.length} 条外部资料 · 仅为世界信息，不是你的记忆</span>
-            </div>
-            <div className="flex flex-wrap gap-1.5">
-              {msg.webSources.map((s, i) => (
-                <a
-                  key={i}
-                  href={s.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  title={`${s.title} — ${s.url}`}
-                  className="max-w-[260px] truncate rounded-md bg-surface border border-border px-2 py-1 text-[11px] text-muted hover:text-accent hover:border-accent/40 transition-colors"
-                >
-                  {s.publishedDate ? `${s.publishedDate.slice(0, 10)} · ` : ""}
-                  {s.title}
-                </a>
-              ))}
-            </div>
-          </div>
-        )}
 
         {/* Bubble */}
         <div
@@ -368,9 +526,11 @@ export default function ChatMessage({
               </div>
               <span className="animate-pulse-subtle font-medium">
                 {streamingStatus ||
-                  (msg.deepThinking
-                    ? "正在深度思考与组织回应..."
-                    : "正在思考与组织回应...")}
+                  (isResearch
+                    ? "正在深度研究查证与组织回应..."
+                    : isDeepThink
+                      ? "正在深度思考与组织回应..."
+                      : "正在思考与组织回应...")}
               </span>
             </div>
           ) : !msg.content ? (

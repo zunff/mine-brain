@@ -10,6 +10,8 @@ export interface RetrievalTrace {
   description: string;
   count: number;
   details?: string[];
+  /** 研究查询选定时 Controller 的真实思考（reasoning_content 原文），仅研究步骤带。 */
+  thinking?: string;
 }
 
 export interface RetrievedMemorySummary {
@@ -19,6 +21,16 @@ export interface RetrievedMemorySummary {
   theme?: string | null;
   content: string;
   relation: "constitution" | "related" | "tension" | "openLoop" | "timeline";
+}
+
+/** 深度研究面板的一步：工具 + 查询 + Controller 思考 + 搜到什么 + 引用的网页。 */
+export interface ResearchPanelStep {
+  tool: string;
+  query: string;
+  thinking?: string;
+  note?: string;
+  memoryTitles: string[];
+  web: { title: string; url: string; publishedDate?: string | null }[];
 }
 
 /** SSE 事件协议：orchestrator 生成、stream-manager 转发、chat 路由直发。改这里即改协议。 */
@@ -32,8 +44,10 @@ export type OrchestratorEvent =
       memories: RetrievedMemorySummary[];
       traces?: RetrievalTrace[];
       deepThinking?: boolean;
+      deepResearch?: boolean;
     }
   | { type: "web"; mode: "read" | "search"; sources: WebSource[] }
+  | { type: "research"; step: ResearchPanelStep }
   | { type: "reasoning"; text: string }
   | { type: "content"; text: string }
   | { type: "done"; candidatesAdded: number };

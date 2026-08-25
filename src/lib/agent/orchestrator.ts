@@ -16,6 +16,12 @@ import {
   touchSession,
 } from "@/lib/memory/repo";
 import { buildSystemPrompt } from "./system-prompt";
+import {
+  researchStepToTrace,
+  runResearchPhase,
+  stepToPanelStep,
+  type ResearchBrief,
+} from "./research";
 import type {
   OrchestratorEvent,
   RetrievedMemorySummary,
@@ -29,6 +35,8 @@ export interface RunChatOptions {
   webSearch?: boolean;
   /** 用户开启「深度思考」：激活多维度认知探针、时间线回溯与高强度长程推理。 */
   deepThinking?: boolean;
+  /** 用户开启「深度研究」：成文前多角度拆解、逐子问题查证记忆与外部资料、对照反例。 */
+  deepResearch?: boolean;
 }
 
 /**
@@ -197,13 +205,37 @@ export async function* runChat(
       memories: memorySummaries,
       traces,
       deepThinking: opts.deepThinking === true,
+      deepResearch: opts.deepResearch === true,
     };
+  }
+
+  // 深度研究：同一管道上的前置查证阶段（规划→逐子问题查证→汇成【研究纪要】）。
+  // 只读、有界、可降级；web 由研究阶段自理，因此开了深度研究就跳过下面的普通联网支线。
+  let research: ResearchBrief | null = null;
+  if (opts.deepResearch) {
+    const researchHistory = listMessages(session.id, 6)
+      .slice(0, -1)
+      .map((m) => `${m.role === "user" ? "用户" : "伙伴"}：${m.content.slice(0, 200)}`);
+    const memoryDigest = [...bundle.constitution, ...bundle.related]
+      .slice(0, 16)
+      .map((m) => `${m.type}「${m.title || m.content.slice(0, 24)}」：${m.content.slice(0, 120)}`)
+      .join("\n");
+    research = yield* runResearchPhase({
+      settings,
+      question: trimmed,
+      memoryDigest,
+      history: researchHistory,
+    });
+    // 研究步骤 trace 并入序列化：重载后探索明细里的查证卡片不丢（与联网/记忆同口径持久化）
+    if (research) {
+      for (const step of research.steps) traces.push(researchStepToTrace(step));
+    }
   }
 
   // 联网支线：开了开关且配了专属 key 才走；任何失败都只记日志——
   // 外部资料是锦上添花，绝不能挡住回复本身（与 embedder 降级同款纪律）。
   let web: WebMaterial | null = null;
-  if (opts.webSearch && trimmed && searcherReady(settings)) {
+  if (opts.webSearch && !opts.deepResearch && trimmed && searcherReady(settings)) {
     const searcher = resolveSearcher(settings);
     if (searcher) {
       yield { type: "status", text: "正在联网检索外部实时资料..." };
@@ -241,9 +273,12 @@ export async function* runChat(
     type: "status",
     text: opts.deepThinking
       ? "多维认知探针已就绪，正在进行深度推演..."
-      : "正在思考与对照...",
+      : opts.deepResearch
+        ? "研究纪要已就绪，正在综合成文..."
+        : "正在思考与对照...",
   };
 
+  const researchPanelSteps = research?.steps.map(stepToPanelStep);
   const serializedMemories =
     memorySummaries.length > 0 || bundle.themes.length > 0 || traces.length > 0
       ? JSON.stringify({
@@ -251,6 +286,10 @@ export async function* runChat(
           memories: memorySummaries,
           traces,
           deepThinking: opts.deepThinking === true,
+          deepResearch: opts.deepResearch === true,
+          ...(researchPanelSteps && researchPanelSteps.length > 0
+            ? { research: researchPanelSteps }
+            : {}),
         })
       : null;
 
@@ -271,7 +310,13 @@ export async function* runChat(
   const messages = [
     {
       role: "system" as const,
-      content: buildSystemPrompt(bundle, getAssistantPreferences(), web, opts.deepThinking === true),
+      content: buildSystemPrompt(
+        bundle,
+        getAssistantPreferences(),
+        web,
+        opts.deepThinking === true,
+        research,
+      ),
     },
     ...history.map((m) => ({ role: m.role, content: rebuildContent(m) })),
     { role: "user" as const, content: buildUserContent(trimmed, images) },
@@ -298,7 +343,7 @@ export async function* runChat(
   };
 
   let reasoning = "";
-  const maxTokens = opts.deepThinking ? 8192 : 4096;
+  const maxTokens = opts.deepThinking || opts.deepResearch ? 8192 : 4096;
   for await (const chunk of provider.chatStream(messages, {
     maxTokens,
     temperature: 0.7,

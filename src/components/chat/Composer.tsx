@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowUp, Brain, Globe, Image as ImageIcon } from "lucide-react";
+import { ArrowUp, Brain, Globe, Image as ImageIcon, Microscope } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -10,6 +10,7 @@ interface ComposerProps {
   streaming: boolean;
   webOn: boolean;
   deepThinkingOn: boolean;
+  deepResearchOn: boolean;
   webAvailable: boolean;
   inputRef: React.RefObject<HTMLTextAreaElement | null>;
   fileRef: React.RefObject<HTMLInputElement | null>;
@@ -21,6 +22,7 @@ interface ComposerProps {
   onSend: () => void;
   onToggleWeb: () => void;
   onToggleDeep: () => void;
+  onToggleResearch: () => void;
 }
 
 export default function Composer({
@@ -29,6 +31,7 @@ export default function Composer({
   streaming,
   webOn,
   deepThinkingOn,
+  deepResearchOn,
   webAvailable,
   inputRef,
   fileRef,
@@ -40,6 +43,7 @@ export default function Composer({
   onSend,
   onToggleWeb,
   onToggleDeep,
+  onToggleResearch,
 }: ComposerProps) {
   return (
     <div className="p-3 sm:p-4 bg-background/95 backdrop-blur border-t border-border">
@@ -128,6 +132,22 @@ export default function Composer({
               >
                 <Brain className="h-3.5 w-3.5" />
                 <span className="hidden sm:inline">深度思考</span>
+              </button>
+              <button
+                type="button"
+                onClick={onToggleResearch}
+                disabled={streaming}
+                aria-pressed={deepResearchOn ? "true" : "false"}
+                title="开启深度研究：多角度拆解问题、逐子问题查证你的记忆与外部资料、主动找反例后综合成文（未配置联网时退化为纯记忆研究；localStorage 记住偏好）"
+                className={cn(
+                  "h-7 rounded-md px-2 text-[11px] font-medium inline-flex items-center gap-1 transition-colors cursor-pointer border",
+                  deepResearchOn
+                    ? "bg-accent-soft border-accent/40 text-accent font-semibold"
+                    : "border-transparent bg-transparent text-muted hover:text-foreground hover:bg-surface-2"
+                )}
+              >
+                <Microscope className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">深度研究</span>
               </button>
             </div>
 
